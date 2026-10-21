@@ -5,9 +5,9 @@
  ******************************************************************************/
 
 #ifdef LV_LVGL_H_INCLUDE_SIMPLE
-#include "src/lvgl/lvgl.h"
+#include "../lvgl/lvgl.h"
 #else
-#include "src/lvgl/lvgl.h"
+#include "../lvgl/lvgl.h"
 #endif
 
 #ifndef FONT_CLOCK_104

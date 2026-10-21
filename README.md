@@ -4,17 +4,24 @@ DeskDash is a swipeable desk dashboard for the **[Waveshare ESP32-C5-Touch-LCD-3
 
 ![DeskDash pages](docs/preview.png)
 
-| Page | Shows |
-|---|---|
-| Clock | Time, date, Wi-Fi and battery status, indoor temperature and humidity, current weather |
-| Weather | Conditions, high/low, feels-like, humidity, wind, next 4 hours |
-| PBI Arrivals | Flights inbound to Palm Beach International (or any airport): airline and flight number, origin, distance, altitude and estimated arrival time |
-| Trending on X | Top 10 trending topics in the US (or any location), with post counts when available |
-| System | Wi-Fi name, signal, IP, battery, indoor reading, uptime, last weather update, brightness slider |
+Every page is a **plugin**: a self-contained folder under `DeskDash/src/plugins/`. You turn pages on or off, or reorder them, by editing one list (see [Plugins](#plugins)).
 
-Swipe left or right to change pages. The screen dims between 10 PM and 7 AM, and a tap brightens it for 30 seconds.
+| Plugin | Shows |
+|---|---|
+| `clock` | Time, date, Wi-Fi and battery status, indoor temperature and humidity, current weather |
+| `weather` | Conditions, high/low, feels-like, humidity, wind, next 4 hours |
+| `arrivals` | Flights arriving at your airport: airline and flight number, origin, distance, altitude and estimated arrival time |
+| `departures` | Flights leaving your airport: taxiing out or climbing away, with destination and takeoff time |
+| `trends` | Top 10 trending topics on X in the US (or any location) |
+| `system` | Wi-Fi name, signal, IP, battery, indoor reading, uptime, last weather update, brightness slider |
+
+Swipe left or right to change pages. On the Arrivals or Departures page, **tap the title to choose another airport**. The choice is saved on the board and applies to both pages.
+
+<img src="docs/airport-picker.png" width="220" alt="Airport picker">
+
+ The screen dims between 10 PM and 7 AM, and a tap brightens it for 30 seconds.
 Weather comes from [Open-Meteo](https://open-meteo.com), which is free and needs no API key. Time comes from NTP.
-Live flight positions come from [adsb.lol](https://adsb.lol), a free community ADS-B network that needs no key. It allows about 500 requests per day per address, so DeskDash checks every 4 minutes by day and every 15 minutes at night. Flights count as arrivals when adsb.lol's route database says they're headed to the airport. Flights with no published route, such as private jets, count when they're descending toward the field on a normal approach path.
+Live flight positions come from [adsb.lol](https://adsb.lol), a free community ADS-B network that needs no key. It allows about 500 requests per day per address, so DeskDash checks every 4 minutes by day and every 15 minutes at night. One request feeds both flight pages. A flight counts as an arrival when adsb.lol's route database says its route ends at the airport, and as a departure when its route starts there. Flights with no published route, such as private jets, are judged by their flight path: descending toward the field on a normal approach slope, or climbing away from it. Light aircraft and helicopters are left out, since most low traffic near an airport is flight training. Aircraft taxiing out show as "Taxi".
 Trending topics are read from [trends24.in](https://trends24.in), a free, unofficial mirror of X's trends, every 30 minutes. It isn't an X API, so it can change or break without notice. The official [X API trends endpoint](https://docs.x.com/x-api/trends/trends-by-woeid/introduction) costs $0.01 per request.
 
 ## Hardware
@@ -27,7 +34,7 @@ Trending topics are read from [trends24.in](https://trends24.in), a free, unoffi
 
 1. **Board package:** install **esp32 by Espressif Systems**, version 3.3.x (Waveshare tests with 3.3.10).
 2. **Library:** install **ArduinoJson 7.x** by Benoit Blanchon. LVGL 8.4 is bundled in `DeskDash/src/`, so it doesn't matter which lvgl version (if any) you have installed.
-3. **Configure:** open `DeskDash/DeskDash.ino`, then set your Wi-Fi name and password, location, time zone, units and trends location in the `config.h` tab. The Wi-Fi name is case-sensitive. For trends, use the path from trends24.in, such as `united-states`, `united-states/miami`, or `""` for worldwide.
+3. **Configure:** open `DeskDash/DeskDash.ino`, then set your Wi-Fi name and password, location, time zone, units, default airport and trends location in the `config.h` tab. The Wi-Fi name is case-sensitive. For trends, use the path from trends24.in, such as `united-states`, `united-states/miami`, or `""` for worldwide.
 4. **Tools menu:**
 
    | Setting | Value |
@@ -61,23 +68,77 @@ softwareupdate --install-rosetta --agree-to-license
 - **Fonts:** Montserrat and Font Awesome 5 glyphs, generated with [`lv_font_conv`](https://github.com/lvgl/lv_font_conv) at the sizes this screen needs.
 - **Indoor sensor:** the SHTC3 sits on the board, so its temperature reading runs a few degrees warm from the board's own heat.
 
+## Plugins
+
+The pages are listed in `DeskDash.ino`:
+
+```cpp
+static const DeskDashPlugin *PAGES[] = {
+  &plugin_clock,
+  &plugin_weather,
+  &plugin_arrivals,
+  &plugin_departures,
+  &plugin_trends,
+  &plugin_system,
+};
+```
+
+Comment out a line to hide that page, or move lines to reorder the pages. The page dots adjust automatically. The clock's weather row reads from the weather plugin, so keep `plugin_weather` listed if you want weather on the clock page.
+
+### Writing a plugin
+
+1. Create `DeskDash/src/plugins/hello/hello.cpp`:
+
+   ```cpp
+   #include "../../core/deskdash.h"
+
+   static lv_obj_t *label;
+
+   static void build(lv_obj_t *page) {          // create your UI once
+     make_label(page, &font_text_24, COL_TEXT, LV_ALIGN_TOP_MID, 0, 22, "Hello");
+     label = make_label(page, &font_text_18, COL_MUTED, LV_ALIGN_CENTER, 0, 0, "");
+   }
+
+   static void tick() {                          // every second, on the UI thread
+     lv_label_set_text_fmt(label, "Up %lu s", millis() / 1000);
+   }
+
+   static void poll() {                          // from loop(): network work goes here
+     // fetch data when it's due, then:  if (ui_lock()) { ...update labels...; ui_unlock(); }
+   }
+
+   extern const DeskDashPlugin plugin_hello = {"Hello", build, tick, poll};
+   ```
+
+2. In `DeskDash.ino`, add `plugin_hello` to the `extern` line and `&plugin_hello` to `PAGES`.
+
+Rules:
+
+- `build()` and `tick()` run on the LVGL thread, where you can change the UI freely.
+- `poll()` runs on the Arduino `loop()` thread. Do HTTP there, keep your own timing, and wrap any UI change in `ui_lock()` / `ui_unlock()`.
+- Only touch I2C (touch, sensors, backlight) from `build()` or `tick()`.
+- `src/core/deskdash.h` lists everything available to plugins: fonts, icons, colors, layout helpers, time formatting, board state (`dd_power()`, `dd_indoor()`, `dd_wifi_up()`), and settings saved on the board (`dd_setting_get()` / `dd_setting_set()`).
+
+### Adding airports
+
+The picker's list is the `AIRPORTS` table at the top of `src/plugins/flights/flights.cpp`. Each entry has the IATA and ICAO codes, a short name and the airport's latitude and longitude. `AIRPORT_CODE` in `config.h` picks which entry is used on first boot.
+
 ## Files
 
-| File | Purpose |
+| Path | Purpose |
 |---|---|
-| `DeskDash.ino` | UI, LVGL task, timers, Wi-Fi and weather |
+| `DeskDash.ino` | Page list, LVGL task, display and touch glue, Wi-Fi |
 | `config.h` | Your settings |
-| `lcd_st7796.*` | Display init and pixel transfer |
-| `Board_IO.*` | CH32V006 I/O expander: resets, backlight, peripheral power |
-| `Touch_FT6336.*` | Touch controller |
-| `sensors.*` | SHTC3 and AXP2101 drivers |
-| `flights.*` | adsb.lol arrivals: aircraft near the airport, route lookups, arrival detection |
+| `src/core/` | Plugin API (`deskdash.h`) and shared helpers |
+| `src/plugins/<name>/` | One folder per page |
+| `src/plugins/flights/` | Shared flight data, the airport picker and the page layout used by `arrivals` and `departures` |
+| `src/drivers/` | ST7796 display, FT6336 touch, CH32V006 I/O expander, SHTC3 and AXP2101 |
+| `src/fonts/` | Generated fonts |
 | `src/lvgl/`, `src/lv_conf.h` | Bundled LVGL 8.4.0 (MIT) and its configuration |
-| `font_*.c` | Generated fonts |
 
 ## Credits and licenses
 
-- The board drivers (`Board_IO.*`, `Touch_FT6336.*`, the ST7796 init sequence and `lv_conf.h`) are adapted from Waveshare's [ESP32-C5-Touch-LCD-3.5](https://github.com/waveshareteam/ESP32-C5-Touch-LCD-3.5) examples (Apache-2.0).
+- The board drivers in `src/drivers/` (`Board_IO.*`, `Touch_FT6336.*`, the ST7796 init sequence) and `src/lv_conf.h` are adapted from Waveshare's [ESP32-C5-Touch-LCD-3.5](https://github.com/waveshareteam/ESP32-C5-Touch-LCD-3.5) examples (Apache-2.0).
 - The fonts are generated from Montserrat (SIL Open Font License) and Font Awesome Free 5 (icons CC BY 4.0, font SIL OFL), as bundled with LVGL.
 - Weather data comes from [Open-Meteo](https://open-meteo.com) (CC BY 4.0). Flight data comes from [adsb.lol](https://adsb.lol) (ODbL). LVGL is MIT-licensed.
 - DeskDash itself is released under the Apache License 2.0. See [LICENSE](LICENSE).

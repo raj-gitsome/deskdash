@@ -23,15 +23,14 @@
 // ---- Units -----------------------------------------------------------------
 #define USE_FAHRENHEIT true      // false = Celsius and km/h
 
-// ---- Airport arrivals ------------------------------------------------------
+// ---- Airport arrivals & departures ------------------------------------------------
 // Live flights from adsb.lol (free community ADS-B data, no key needed).
-#define AIRPORT_ICAO            "KPBI"
+// This is only the first-boot default: tap the Arrivals or Departures title on the
+// display to pick another airport (the choice is saved on the board). The list of
+// airports is in src/plugins/flights/flights.cpp.
 #define AIRPORT_CODE            "PBI"
-#define AIRPORT_NAME            "Palm Beach Intl"
-#define AIRPORT_LAT             26.6832
-#define AIRPORT_LON             -80.0956
 #define ARRIVALS_RADIUS_NM      60      // how far out to look
-#define ARRIVALS_REFRESH_SECONDS 60
+#define ARRIVALS_REFRESH_SECONDS 240    // adsb.lol allows ~500 requests a day per address
 
 // ---- Trending on X ---------------------------------------------------------
 // Scraped from trends24.in (free, unofficial). Use the country/city path from that site,
