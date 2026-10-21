@@ -5,9 +5,9 @@
  ******************************************************************************/
 
 #ifdef LV_LVGL_H_INCLUDE_SIMPLE
-#include "lvgl.h"
+#include "src/lvgl/lvgl.h"
 #else
-#include "lvgl.h"
+#include "src/lvgl/lvgl.h"
 #endif
 
 #ifndef FONT_TEXT_56

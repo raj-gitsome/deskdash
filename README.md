@@ -8,11 +8,13 @@ DeskDash is a swipeable desk dashboard for the **[Waveshare ESP32-C5-Touch-LCD-3
 |---|---|
 | Clock | Time, date, Wi-Fi and battery status, indoor temperature and humidity, current weather |
 | Weather | Conditions, high/low, feels-like, humidity, wind, next 4 hours |
+| PBI Arrivals | Flights inbound to Palm Beach International (or any airport): airline and flight number, origin, distance, altitude and estimated arrival time |
 | Trending on X | Top 10 trending topics in the US (or any location), with post counts when available |
 | System | Wi-Fi name, signal, IP, battery, indoor reading, uptime, last weather update, brightness slider |
 
 Swipe left or right to change pages. The screen dims between 10 PM and 7 AM, and a tap brightens it for 30 seconds.
 Weather comes from [Open-Meteo](https://open-meteo.com), which is free and needs no API key. Time comes from NTP.
+Live flight positions come from [adsb.lol](https://adsb.lol), a free community ADS-B network that needs no key. It allows about 500 requests per day per address, so DeskDash checks every 4 minutes by day and every 15 minutes at night. Flights count as arrivals when adsb.lol's route database says they're headed to the airport. Flights with no published route, such as private jets, count when they're descending toward the field on a normal approach path.
 Trending topics are read from [trends24.in](https://trends24.in), a free, unofficial mirror of X's trends, every 30 minutes. It isn't an X API, so it can change or break without notice. The official [X API trends endpoint](https://docs.x.com/x-api/trends/trends-by-woeid/introduction) costs $0.01 per request.
 
 ## Hardware
@@ -24,9 +26,7 @@ Trending topics are read from [trends24.in](https://trends24.in), a free, unoffi
 ## Setup (Arduino IDE)
 
 1. **Board package:** install **esp32 by Espressif Systems**, version 3.3.x (Waveshare tests with 3.3.10).
-2. **Libraries:**
-   - **lvgl 8.4.0.** It must be 8.x. In Library Manager, pick version 8.4.0 explicitly, and decline later prompts to update it to 9.x.
-   - **ArduinoJson 7.x** by Benoit Blanchon.
+2. **Library:** install **ArduinoJson 7.x** by Benoit Blanchon. LVGL 8.4 is bundled in `DeskDash/src/`, so it doesn't matter which lvgl version (if any) you have installed.
 3. **Configure:** open `DeskDash/DeskDash.ino`, then set your Wi-Fi name and password, location, time zone, units and trends location in the `config.h` tab. The Wi-Fi name is case-sensitive. For trends, use the path from trends24.in, such as `united-states`, `united-states/miami`, or `""` for worldwide.
 4. **Tools menu:**
 
@@ -67,16 +67,17 @@ softwareupdate --install-rosetta --agree-to-license
 |---|---|
 | `DeskDash.ino` | UI, LVGL task, timers, Wi-Fi and weather |
 | `config.h` | Your settings |
-| `lv_conf.h` | LVGL configuration |
 | `lcd_st7796.*` | Display init and pixel transfer |
 | `Board_IO.*` | CH32V006 I/O expander: resets, backlight, peripheral power |
 | `Touch_FT6336.*` | Touch controller |
 | `sensors.*` | SHTC3 and AXP2101 drivers |
+| `flights.*` | adsb.lol arrivals: aircraft near the airport, route lookups, arrival detection |
+| `src/lvgl/`, `src/lv_conf.h` | Bundled LVGL 8.4.0 (MIT) and its configuration |
 | `font_*.c` | Generated fonts |
 
 ## Credits and licenses
 
 - The board drivers (`Board_IO.*`, `Touch_FT6336.*`, the ST7796 init sequence and `lv_conf.h`) are adapted from Waveshare's [ESP32-C5-Touch-LCD-3.5](https://github.com/waveshareteam/ESP32-C5-Touch-LCD-3.5) examples (Apache-2.0).
 - The fonts are generated from Montserrat (SIL Open Font License) and Font Awesome Free 5 (icons CC BY 4.0, font SIL OFL), as bundled with LVGL.
-- Weather data comes from [Open-Meteo](https://open-meteo.com) (CC BY 4.0).
+- Weather data comes from [Open-Meteo](https://open-meteo.com) (CC BY 4.0). Flight data comes from [adsb.lol](https://adsb.lol) (ODbL). LVGL is MIT-licensed.
 - DeskDash itself is released under the Apache License 2.0. See [LICENSE](LICENSE).

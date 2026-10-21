@@ -5,8 +5,9 @@
 //  Pages (swipe left/right):
 //    1. Clock    — time, date, indoor temperature/humidity, current weather
 //    2. Weather  — conditions, high/low, feels-like, humidity, wind, next 4 hours
-//    3. Trending — top trending topics on X (scraped from trends24.in)
-//    4. System   — Wi-Fi, battery, uptime, brightness slider
+//    3. Arrivals — live flights arriving at PBI (adsb.lol ADS-B data)
+//    4. Trending — top trending topics on X (scraped from trends24.in)
+//    5. System   — Wi-Fi, battery, uptime, brightness slider
 //
 //  Weather comes from Open-Meteo (free, no API key). Time comes from NTP.
 //  Set your Wi-Fi and location in config.h.
@@ -19,8 +20,7 @@
 #include <ArduinoJson.h>
 #include <time.h>
 #include <esp_heap_caps.h>
-#define LV_CONF_INCLUDE_SIMPLE
-#include <lvgl.h>
+#include "src/lvgl/lvgl.h"     // LVGL 8.4 is bundled in src/ (config in src/lv_conf.h)
 
 #include "config.h"
 
@@ -35,10 +35,27 @@
 #ifndef TRENDS_COUNT
 #define TRENDS_COUNT            10
 #endif
+#ifndef AIRPORT_ICAO
+#define AIRPORT_ICAO            "KPBI"
+#define AIRPORT_CODE            "PBI"
+#define AIRPORT_NAME            "Palm Beach Intl"
+#define AIRPORT_LAT             26.6832
+#define AIRPORT_LON             -80.0956
+#endif
+#ifndef ARRIVALS_RADIUS_NM
+#define ARRIVALS_RADIUS_NM      60
+#endif
+#ifndef ARRIVALS_REFRESH_SECONDS
+#define ARRIVALS_REFRESH_SECONDS 240    // adsb.lol allows ~500 requests/day per address
+#endif
+#ifndef ARRIVALS_NIGHT_REFRESH_SECONDS
+#define ARRIVALS_NIGHT_REFRESH_SECONDS 900
+#endif
 #include "Board_IO.h"
 #include "Touch_FT6336.h"
 #include "lcd_st7796.h"
 #include "sensors.h"
+#include "flights.h"
 
 // ---- Fonts generated for this project (see the font_*.c files) --------------
 LV_FONT_DECLARE(font_clock_104);  // digits and colon for the big clock
@@ -63,6 +80,9 @@ LV_FONT_DECLARE(font_icons_44);   // weather icons, small
 #define ICON_WIND       "\xEF\x9C\xAE"
 #define ICON_THERMO     "\xEF\x8B\x89"
 #define ICON_HOME       "\xEF\x80\x95"
+#define ICON_ARRIVAL    "\xEF\x96\xAF"
+#define ICON_PLANE      "\xEF\x81\xB2"
+#define DOT             "\xC2\xB7"
 #define DEG             "\xC2\xB0"
 
 // ---- Colors ------------------------------------------------------------------
@@ -79,7 +99,7 @@ LV_FONT_DECLARE(font_icons_44);   // weather icons, small
 
 #define SCREEN_W LCD_WIDTH
 #define SCREEN_H LCD_HEIGHT
-#define PAGE_COUNT 4
+#define PAGE_COUNT 5
 
 // ---- Weather data --------------------------------------------------------------
 struct HourForecast {
@@ -113,6 +133,7 @@ struct Trends {
 };
 
 static Trends trends;
+static Arrivals arrivals;
 
 // ---- UI objects ----------------------------------------------------------------
 static lv_obj_t *tileview;
@@ -127,6 +148,9 @@ static lv_obj_t *lbl_h_time[4], *lbl_h_icon[4], *lbl_h_temp[4];
 static lv_obj_t *lbl_t_rank[TRENDS_COUNT], *lbl_t_name[TRENDS_COUNT], *lbl_t_count[TRENDS_COUNT];
 static lv_obj_t *lbl_t_status;
 
+static lv_obj_t *lbl_a_status, *lbl_a_empty;
+static lv_obj_t *lbl_a_name[MAX_ARRIVALS], *lbl_a_eta[MAX_ARRIVALS], *lbl_a_info[MAX_ARRIVALS];
+
 static lv_obj_t *lbl_sys;
 static lv_obj_t *slider_bright;
 
@@ -137,6 +161,7 @@ static uint8_t current_brightness = 255;
 static volatile uint32_t last_touch_ms = 0;
 static uint32_t last_weather_fetch_ms = 0;
 static uint32_t last_trends_fetch_ms = 0;
+static uint32_t last_flights_fetch_ms = 0;
 static bool trends_fetched_once = false;
 static bool weather_fetched_once = false;
 static bool touch_ok = false;
@@ -308,6 +333,23 @@ static void build_weather_page(lv_obj_t *p) {
   }
 }
 
+static void build_arrivals_page(lv_obj_t *p) {
+  make_label(p, &font_text_24, COL_TEXT, LV_ALIGN_TOP_MID, 0, 22, ICON_ARRIVAL "  " AIRPORT_CODE " Arrivals");
+  lbl_a_status = make_label(p, &font_text_18, COL_MUTED, LV_ALIGN_TOP_MID, 0, 54, AIRPORT_NAME);
+  lbl_a_empty  = make_label(p, &font_text_18, COL_MUTED, LV_ALIGN_TOP_MID, 0, 200, "Looking for flights...");
+
+  for (int i = 0; i < MAX_ARRIVALS; i++) {
+    lv_coord_t y = 90 + i * 57;
+    lbl_a_name[i] = make_label(p, &font_text_24, COL_TEXT, LV_ALIGN_TOP_LEFT, 20, y, "");
+    lv_label_set_long_mode(lbl_a_name[i], LV_LABEL_LONG_DOT);
+    lv_obj_set_width(lbl_a_name[i], 200);
+    lbl_a_eta[i]  = make_label(p, &font_text_24, COL_ACCENT, LV_ALIGN_TOP_RIGHT, -20, y, "");
+    lbl_a_info[i] = make_label(p, &font_text_18, COL_MUTED, LV_ALIGN_TOP_LEFT, 20, y + 28, "");
+    lv_label_set_long_mode(lbl_a_info[i], LV_LABEL_LONG_DOT);
+    lv_obj_set_width(lbl_a_info[i], 282);
+  }
+}
+
 static void build_trends_page(lv_obj_t *p) {
   make_label(p, &font_text_24, COL_TEXT, LV_ALIGN_TOP_MID, 0, 22, "Trending on X");
   lbl_t_status = make_label(p, &font_text_18, COL_MUTED, LV_ALIGN_TOP_MID, 0, 54, TRENDS_LOCATION_NAME);
@@ -364,8 +406,9 @@ static void build_ui() {
 
   build_clock_page(make_tile(0));
   build_weather_page(make_tile(1));
-  build_trends_page(make_tile(2));
-  build_system_page(make_tile(3));
+  build_arrivals_page(make_tile(2));
+  build_trends_page(make_tile(3));
+  build_system_page(make_tile(4));
 
   lv_obj_t *dot_row = lv_obj_create(scr);
   lv_obj_remove_style_all(dot_row);
@@ -451,6 +494,41 @@ static void ui_show_trends() {
     format_count(buf, sizeof(buf), has ? trends.items[i].count : -1);
     lv_label_set_text(lbl_t_count[i], buf);
   }
+}
+
+static void format_clock(char *out, size_t n, int hour, int minute, bool with_ampm);
+
+static void ui_show_arrivals() {
+  char buf[96];
+  for (int i = 0; i < MAX_ARRIVALS; i++) {
+    bool has = i < arrivals.n;
+    const Arrival &a = arrivals.items[i];
+    lv_label_set_text(lbl_a_name[i], has ? a.display : "");
+    if (!has) {
+      lv_label_set_text(lbl_a_eta[i], "");
+      lv_label_set_text(lbl_a_info[i], "");
+      continue;
+    }
+    if (a.eta) {
+      struct tm te;
+      localtime_r(&a.eta, &te);
+      format_clock(buf, sizeof(buf), te.tm_hour, te.tm_min, false);   // estimated arrival time, e.g. "3:52"
+    } else {
+      buf[0] = 0;
+    }
+    lv_label_set_text(lbl_a_eta[i], buf);
+
+    char from[32];
+    if (a.origin_city[0])  snprintf(from, sizeof(from), "From %s", a.origin_city);
+    else if (a.origin[0])  snprintf(from, sizeof(from), "From %s", a.origin);
+    else             snprintf(from, sizeof(from), "%s", a.type[0] ? a.type : "Private");
+    char alt[16];
+    if (a.alt_ft >= 1000) snprintf(alt, sizeof(alt), "%.1fk ft", a.alt_ft / 1000.0f);
+    else                  snprintf(alt, sizeof(alt), "%d ft", a.alt_ft);
+    snprintf(buf, sizeof(buf), "%s " DOT " %.0f nm " DOT " %s", from, a.dist_nm, alt);
+    lv_label_set_text(lbl_a_info[i], buf);
+  }
+  lv_label_set_text(lbl_a_empty, arrivals.n ? "" : "No arrivals right now");
 }
 
 static void format_uptime(char *out, size_t n) {
@@ -543,13 +621,23 @@ static void clock_timer_cb(lv_timer_t *t) {
            batt, indoor, up, updated);
   lv_label_set_text(lbl_sys, buf);
 
+  // Arrivals page subtitle
+  if (arrivals.updated) {
+    struct tm ta;
+    localtime_r(&arrivals.updated, &ta);
+    char at[16];
+    format_clock(at, sizeof(at), ta.tm_hour, ta.tm_min, true);
+    snprintf(buf, sizeof(buf), "%d inbound  " DOT "  updated %s", arrivals.n, at);
+    lv_label_set_text(lbl_a_status, buf);
+  }
+
   // Trends page subtitle: location and when the list was fetched
   if (trends.updated) {
     struct tm tt;
     localtime_r(&trends.updated, &tt);
     char at[16];
     format_clock(at, sizeof(at), tt.tm_hour, tt.tm_min, true);
-    snprintf(buf, sizeof(buf), "%s  -  %s", TRENDS_LOCATION_NAME, at);
+    snprintf(buf, sizeof(buf), "%s  " DOT "  %s", TRENDS_LOCATION_NAME, at);
     lv_label_set_text(lbl_t_status, buf);
   }
 
@@ -852,6 +940,22 @@ void loop() {
     if (last_weather_fetch_ms == 0 || millis() - last_weather_fetch_ms > interval) {
       last_weather_fetch_ms = millis();
       if (fetch_weather()) weather_fetched_once = true;
+    }
+    time_t now_t = time(nullptr);
+    struct tm now_tm;
+    localtime_r(&now_t, &now_tm);
+    bool night = NIGHT_START_HOUR > NIGHT_END_HOUR
+                   ? (now_tm.tm_hour >= NIGHT_START_HOUR || now_tm.tm_hour < NIGHT_END_HOUR)
+                   : (now_tm.tm_hour >= NIGHT_START_HOUR && now_tm.tm_hour < NIGHT_END_HOUR);
+    uint32_t f_interval = (night ? ARRIVALS_NIGHT_REFRESH_SECONDS : ARRIVALS_REFRESH_SECONDS) * 1000UL;
+    if (last_flights_fetch_ms == 0 || millis() - last_flights_fetch_ms > f_interval) {
+      last_flights_fetch_ms = millis();
+      Arrivals a;
+      if (flights_fetch(AIRPORT_ICAO, AIRPORT_LAT, AIRPORT_LON, ARRIVALS_RADIUS_NM, &a) && ui_lock()) {
+        arrivals = a;
+        ui_show_arrivals();
+        ui_unlock();
+      }
     }
     uint32_t t_interval = (trends_fetched_once ? TRENDS_REFRESH_MINUTES * 60UL : 60UL) * 1000UL;
     if (last_trends_fetch_ms == 0 || millis() - last_trends_fetch_ms > t_interval) {
