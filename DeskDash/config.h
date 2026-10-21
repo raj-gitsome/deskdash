@@ -23,6 +23,14 @@
 // ---- Units -----------------------------------------------------------------
 #define USE_FAHRENHEIT true      // false = Celsius and km/h
 
+// ---- Trending on X ---------------------------------------------------------
+// Scraped from trends24.in (free, unofficial). Use the country/city path from that site,
+// e.g. "united-states", "united-states/miami", or "" for worldwide.
+#define TRENDS_LOCATION         "united-states"
+#define TRENDS_LOCATION_NAME    "United States"
+#define TRENDS_REFRESH_MINUTES  30
+#define TRENDS_COUNT            10
+
 // ---- Weather refresh -------------------------------------------------------
 #define WEATHER_REFRESH_MINUTES 15
 

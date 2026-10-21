@@ -5,7 +5,8 @@
 //  Pages (swipe left/right):
 //    1. Clock    — time, date, indoor temperature/humidity, current weather
 //    2. Weather  — conditions, high/low, feels-like, humidity, wind, next 4 hours
-//    3. System   — Wi-Fi, battery, uptime, brightness slider
+//    3. Trending — top trending topics on X (scraped from trends24.in)
+//    4. System   — Wi-Fi, battery, uptime, brightness slider
 //
 //  Weather comes from Open-Meteo (free, no API key). Time comes from NTP.
 //  Set your Wi-Fi and location in config.h.
@@ -14,6 +15,7 @@
 #include <Wire.h>
 #include <WiFi.h>
 #include <HTTPClient.h>
+#include <WiFiClientSecure.h>
 #include <ArduinoJson.h>
 #include <time.h>
 #include <esp_heap_caps.h>
@@ -21,6 +23,18 @@
 #include <lvgl.h>
 
 #include "config.h"
+
+// Defaults for settings added after the first release, so older config.h files still build
+#ifndef TRENDS_LOCATION
+#define TRENDS_LOCATION         "united-states"
+#define TRENDS_LOCATION_NAME    "United States"
+#endif
+#ifndef TRENDS_REFRESH_MINUTES
+#define TRENDS_REFRESH_MINUTES  30
+#endif
+#ifndef TRENDS_COUNT
+#define TRENDS_COUNT            10
+#endif
 #include "Board_IO.h"
 #include "Touch_FT6336.h"
 #include "lcd_st7796.h"
@@ -65,6 +79,7 @@ LV_FONT_DECLARE(font_icons_44);   // weather icons, small
 
 #define SCREEN_W LCD_WIDTH
 #define SCREEN_H LCD_HEIGHT
+#define PAGE_COUNT 4
 
 // ---- Weather data --------------------------------------------------------------
 struct HourForecast {
@@ -85,15 +100,32 @@ struct Weather {
 
 static Weather weather;
 
+// ---- Trending topics -------------------------------------------------------------
+struct Trend {
+  char name[48];
+  long count;      // posts, or -1 if the site didn't list a count
+};
+
+struct Trends {
+  int n = 0;
+  Trend items[TRENDS_COUNT];
+  time_t updated = 0;
+};
+
+static Trends trends;
+
 // ---- UI objects ----------------------------------------------------------------
 static lv_obj_t *tileview;
-static lv_obj_t *dots[3];
+static lv_obj_t *dots[PAGE_COUNT];
 
 static lv_obj_t *lbl_status, *lbl_time, *lbl_ampm, *lbl_date, *lbl_indoor;
 static lv_obj_t *lbl_c_icon, *lbl_c_temp, *lbl_c_cond, *lbl_c_hilo;
 
 static lv_obj_t *lbl_w_icon, *lbl_w_temp, *lbl_w_cond, *lbl_w_hilo, *lbl_w_detail;
 static lv_obj_t *lbl_h_time[4], *lbl_h_icon[4], *lbl_h_temp[4];
+
+static lv_obj_t *lbl_t_rank[TRENDS_COUNT], *lbl_t_name[TRENDS_COUNT], *lbl_t_count[TRENDS_COUNT];
+static lv_obj_t *lbl_t_status;
 
 static lv_obj_t *lbl_sys;
 static lv_obj_t *slider_bright;
@@ -104,6 +136,8 @@ static uint8_t day_brightness = DAY_BRIGHTNESS;
 static uint8_t current_brightness = 255;
 static volatile uint32_t last_touch_ms = 0;
 static uint32_t last_weather_fetch_ms = 0;
+static uint32_t last_trends_fetch_ms = 0;
+static bool trends_fetched_once = false;
 static bool weather_fetched_once = false;
 static bool touch_ok = false;
 static bool indoor_ok = false;
@@ -206,7 +240,7 @@ static lv_obj_t *make_tile(uint8_t col) {
 }
 
 static void update_dots(uint8_t active) {
-  for (int i = 0; i < 3; i++) {
+  for (int i = 0; i < PAGE_COUNT; i++) {
     lv_obj_set_style_bg_color(dots[i], i == active ? COL_TEXT : COL_FAINT, 0);
     lv_obj_set_width(dots[i], i == active ? 20 : 8);
   }
@@ -274,6 +308,22 @@ static void build_weather_page(lv_obj_t *p) {
   }
 }
 
+static void build_trends_page(lv_obj_t *p) {
+  make_label(p, &font_text_24, COL_TEXT, LV_ALIGN_TOP_MID, 0, 22, "Trending on X");
+  lbl_t_status = make_label(p, &font_text_18, COL_MUTED, LV_ALIGN_TOP_MID, 0, 54, TRENDS_LOCATION_NAME);
+
+  for (int i = 0; i < TRENDS_COUNT; i++) {
+    lv_coord_t y = 92 + i * 34;
+    char num[4];
+    snprintf(num, sizeof(num), "%d", i + 1);
+    lbl_t_rank[i] = make_label(p, &font_text_18, COL_MUTED, LV_ALIGN_TOP_RIGHT, -(SCREEN_W - 50), y, num);
+    lbl_t_name[i] = make_label(p, &font_text_18, COL_TEXT, LV_ALIGN_TOP_LEFT, 62, y, i == 0 ? "Loading..." : "");
+    lv_label_set_long_mode(lbl_t_name[i], LV_LABEL_LONG_DOT);
+    lv_obj_set_width(lbl_t_name[i], 178);
+    lbl_t_count[i] = make_label(p, &font_text_18, COL_MUTED, LV_ALIGN_TOP_RIGHT, -26, y, "");
+  }
+}
+
 static void build_system_page(lv_obj_t *p) {
   make_label(p, &font_text_24, COL_TEXT, LV_ALIGN_TOP_MID, 0, 22, "System");
 
@@ -314,7 +364,8 @@ static void build_ui() {
 
   build_clock_page(make_tile(0));
   build_weather_page(make_tile(1));
-  build_system_page(make_tile(2));
+  build_trends_page(make_tile(2));
+  build_system_page(make_tile(3));
 
   lv_obj_t *dot_row = lv_obj_create(scr);
   lv_obj_remove_style_all(dot_row);
@@ -323,7 +374,7 @@ static void build_ui() {
   lv_obj_set_style_pad_column(dot_row, 8, 0);
   lv_obj_align(dot_row, LV_ALIGN_BOTTOM_MID, 0, -22);
   lv_obj_clear_flag(dot_row, LV_OBJ_FLAG_CLICKABLE);
-  for (int i = 0; i < 3; i++) {
+  for (int i = 0; i < PAGE_COUNT; i++) {
     dots[i] = lv_obj_create(dot_row);
     lv_obj_remove_style_all(dots[i]);
     lv_obj_set_size(dots[i], 8, 8);
@@ -379,6 +430,26 @@ static void ui_show_weather() {
     lv_obj_set_style_text_color(lbl_h_icon[i], weather_color(h.code, h.is_day), 0);
     snprintf(buf, sizeof(buf), "%.0f" DEG, h.temp);
     lv_label_set_text(lbl_h_temp[i], buf);
+  }
+}
+
+static void format_count(char *out, size_t n, long c) {
+  if (c < 0)             out[0] = 0;
+  else if (c >= 1000000) snprintf(out, n, "%.1fM", c / 1000000.0);
+  else if (c >= 10000)   snprintf(out, n, "%ldK", c / 1000);
+  else if (c >= 1000)    snprintf(out, n, "%.1fK", c / 1000.0);
+  else                   snprintf(out, n, "%ld", c);
+}
+
+static void ui_show_trends() {
+  char buf[24];
+  for (int i = 0; i < TRENDS_COUNT; i++) {
+    bool has = i < trends.n;
+    snprintf(buf, sizeof(buf), "%d", i + 1);
+    lv_label_set_text(lbl_t_rank[i], has ? buf : "");
+    lv_label_set_text(lbl_t_name[i], has ? trends.items[i].name : "");
+    format_count(buf, sizeof(buf), has ? trends.items[i].count : -1);
+    lv_label_set_text(lbl_t_count[i], buf);
   }
 }
 
@@ -472,6 +543,16 @@ static void clock_timer_cb(lv_timer_t *t) {
            batt, indoor, up, updated);
   lv_label_set_text(lbl_sys, buf);
 
+  // Trends page subtitle: location and when the list was fetched
+  if (trends.updated) {
+    struct tm tt;
+    localtime_r(&trends.updated, &tt);
+    char at[16];
+    format_clock(at, sizeof(at), tt.tm_hour, tt.tm_min, true);
+    snprintf(buf, sizeof(buf), "%s  -  %s", TRENDS_LOCATION_NAME, at);
+    lv_label_set_text(lbl_t_status, buf);
+  }
+
   // Brightness: dim at night, a tap wakes it for a while
   bool night = time_ok && (NIGHT_START_HOUR > NIGHT_END_HOUR
                              ? (tm_now.tm_hour >= NIGHT_START_HOUR || tm_now.tm_hour < NIGHT_END_HOUR)
@@ -547,6 +628,84 @@ static void wifi_scan_report() {
                   (int)WiFi.RSSI(i), (int)WiFi.encryptionType(i), WiFi.SSID(i) == WIFI_SSID ? "   <-- yours" : "");
   }
   WiFi.scanDelete();
+}
+
+// Copies trend text into out, decoding the common HTML entities and dropping characters
+// the display fonts can't draw (anything outside printable ASCII).
+static void clean_trend_name(const String &in, char *out, size_t n) {
+  static const struct { const char *ent; char ch; } ents[] = {
+    {"&amp;", '&'}, {"&#39;", '\''}, {"&#039;", '\''}, {"&quot;", '"'}, {"&lt;", '<'}, {"&gt;", '>'},
+  };
+  size_t o = 0;
+  for (size_t i = 0; i < in.length() && o + 1 < n; i++) {
+    char c = in[i];
+    if (c == '&') {
+      bool matched = false;
+      for (auto &e : ents) {
+        size_t len = strlen(e.ent);
+        if (in.substring(i, i + len) == e.ent) { out[o++] = e.ch; i += len - 1; matched = true; break; }
+      }
+      if (matched) continue;
+    }
+    if ((uint8_t)c >= 0x20 && (uint8_t)c < 0x7F) out[o++] = c;
+  }
+  while (o > 0 && out[o - 1] == ' ') o--;   // trim trailing spaces left by dropped emoji
+  out[o] = 0;
+}
+
+// Reads the most recent hour of trends from trends24.in. The page is ~250 KB, so it is
+// parsed as a stream: find the first <ol class=trend-card__list>, then read each item.
+static bool fetch_trends() {
+  String url = String("https://trends24.in/") + TRENDS_LOCATION + "/";
+
+  WiFiClientSecure client;
+  client.setInsecure();      // public page, nothing sent; skips certificate checks
+  HTTPClient http;
+  http.useHTTP10(true);
+  http.setTimeout(15000);
+  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+  http.setUserAgent("Mozilla/5.0 (DeskDash; ESP32-C5)");
+  if (!http.begin(client, url)) return false;
+  int status = http.GET();
+  if (status != HTTP_CODE_OK) {
+    Serial.printf("[trends] HTTP %d (%s), free heap %u\n", status, http.errorToString(status).c_str(),
+                  (unsigned)ESP.getFreeHeap());
+    http.end();
+    return false;
+  }
+
+  Stream &s = http.getStream();
+  s.setTimeout(5000);
+  Trends t;
+  if (s.find("<ol class=trend-card__list>")) {
+    while (t.n < TRENDS_COUNT && s.findUntil((char *)"class=trend-link>", (char *)"</ol>")) {
+      String name = s.readStringUntil('<');
+      long count = -1;
+      if (s.findUntil((char *)"data-count=\"", (char *)"</li>")) {
+        String c = s.readStringUntil('"');
+        if (c.length()) count = c.toInt();
+      }
+      clean_trend_name(name, t.items[t.n].name, sizeof(t.items[t.n].name));
+      if (t.items[t.n].name[0]) {          // skip trends written entirely in other scripts
+        t.items[t.n].count = count;
+        t.n++;
+      }
+    }
+  }
+  http.end();
+
+  if (t.n == 0) {
+    Serial.println("[trends] no trends found (page layout may have changed)");
+    return false;
+  }
+  t.updated = time(nullptr);
+  if (ui_lock()) {
+    trends = t;
+    ui_show_trends();
+    ui_unlock();
+  }
+  Serial.printf("[trends] %d trends, #1: %s\n", t.n, t.items[0].name);
+  return true;
 }
 
 static bool fetch_weather() {
@@ -693,6 +852,11 @@ void loop() {
     if (last_weather_fetch_ms == 0 || millis() - last_weather_fetch_ms > interval) {
       last_weather_fetch_ms = millis();
       if (fetch_weather()) weather_fetched_once = true;
+    }
+    uint32_t t_interval = (trends_fetched_once ? TRENDS_REFRESH_MINUTES * 60UL : 60UL) * 1000UL;
+    if (last_trends_fetch_ms == 0 || millis() - last_trends_fetch_ms > t_interval) {
+      last_trends_fetch_ms = millis();
+      if (fetch_trends()) trends_fetched_once = true;
     }
   } else {
     if (wifi_lost_since == 0) wifi_lost_since = millis();

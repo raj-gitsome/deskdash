@@ -8,10 +8,12 @@ DeskDash is a swipeable desk dashboard for the **[Waveshare ESP32-C5-Touch-LCD-3
 |---|---|
 | Clock | Time, date, Wi-Fi and battery status, indoor temperature and humidity, current weather |
 | Weather | Conditions, high/low, feels-like, humidity, wind, next 4 hours |
+| Trending on X | Top 10 trending topics in the US (or any location), with post counts when available |
 | System | Wi-Fi name, signal, IP, battery, indoor reading, uptime, last weather update, brightness slider |
 
 Swipe left or right to change pages. The screen dims between 10 PM and 7 AM, and a tap brightens it for 30 seconds.
 Weather comes from [Open-Meteo](https://open-meteo.com), which is free and needs no API key. Time comes from NTP.
+Trending topics are read from [trends24.in](https://trends24.in), a free, unofficial mirror of X's trends, every 30 minutes. It isn't an X API, so it can change or break without notice. The official [X API trends endpoint](https://docs.x.com/x-api/trends/trends-by-woeid/introduction) costs $0.01 per request.
 
 ## Hardware
 
@@ -25,7 +27,7 @@ Weather comes from [Open-Meteo](https://open-meteo.com), which is free and needs
 2. **Libraries:**
    - **lvgl 8.4.0.** It must be 8.x. In Library Manager, pick version 8.4.0 explicitly, and decline later prompts to update it to 9.x.
    - **ArduinoJson 7.x** by Benoit Blanchon.
-3. **Configure:** open `DeskDash/DeskDash.ino`, then set your Wi-Fi name and password, location, time zone and units in the `config.h` tab. The Wi-Fi name is case-sensitive.
+3. **Configure:** open `DeskDash/DeskDash.ino`, then set your Wi-Fi name and password, location, time zone, units and trends location in the `config.h` tab. The Wi-Fi name is case-sensitive. For trends, use the path from trends24.in, such as `united-states`, `united-states/miami`, or `""` for worldwide.
 4. **Tools menu:**
 
    | Setting | Value |
@@ -52,9 +54,10 @@ softwareupdate --install-rosetta --agree-to-license
 ## How it works
 
 - **Display:** an ST7796 on SPI at 60 MHz, using `esp_lcd` panel IO with DMA. The init sequence comes from Waveshare's example.
-- **LVGL 8.4:** LVGL runs in its own FreeRTOS task, with a mutex around every UI change. The draw buffers are two 40-line buffers in internal DMA-capable RAM. A full-screen buffer in PSRAM fails once Wi-Fi is running, because the SPI driver can't find internal memory to bounce it through.
+- **LVGL 8.4:** LVGL runs in its own FreeRTOS task, with a mutex around every UI change. The draw buffers are two 40-line buffers in internal DMA-capable RAM. A full-screen buffer in PSRAM fails once Wi-Fi is running, because the SPI driver can't find internal memory to bounce it through. LVGL's object heap lives in PSRAM (`LV_MEM_CUSTOM`), which keeps about 64 KB of internal RAM free for Wi-Fi and TLS.
 - **I2C (SDA 27, SCL 26):** all I2C traffic (touch, backlight PWM through the CH32V006, AXP2101 battery status, SHTC3) runs on the LVGL task, so the bus is never shared between threads.
-- **Weather:** the board fetches weather over plain HTTP from Open-Meteo every 15 minutes. The data is public and read-only, and skipping TLS saves about 40 KB of internal RAM.
+- **Weather:** the board fetches weather over plain HTTP from Open-Meteo every 15 minutes.
+- **Trends:** the trends24.in page is about 250 KB, so the board parses it as a stream over HTTPS. It takes the first `<ol class=trend-card__list>` (the latest hour) and reads each `trend-link` name and `data-count`. HTML entities are decoded, and characters the fonts can't draw are dropped. A topic written entirely in another script is skipped.
 - **Fonts:** Montserrat and Font Awesome 5 glyphs, generated with [`lv_font_conv`](https://github.com/lvgl/lv_font_conv) at the sizes this screen needs.
 - **Indoor sensor:** the SHTC3 sits on the board, so its temperature reading runs a few degrees warm from the board's own heat.
 
