@@ -21,7 +21,11 @@ Swipe left or right to change pages. On the Arrivals or Departures page, **tap t
 
  The screen dims between 10 PM and 7 AM, and a tap brightens it for 30 seconds.
 Weather comes from [Open-Meteo](https://open-meteo.com), which is free and needs no API key. Time comes from NTP.
-Live flight positions come from [adsb.lol](https://adsb.lol), a free community ADS-B network that needs no key. It allows about 500 requests per day per address, so DeskDash checks every 4 minutes by day and every 15 minutes at night. One request feeds both flight pages. A flight counts as an arrival when adsb.lol's route database says its route ends at the airport, and as a departure when its route starts there. Flights with no published route, such as private jets, are judged by their flight path: descending toward the field on a normal approach slope, or climbing away from it. Light aircraft and helicopters are left out, since most low traffic near an airport is flight training. Aircraft taxiing out show as "Taxi".
+Live flight positions come from [adsb.fi](https://adsb.fi), a free community ADS-B network that needs no key, and are refreshed every minute. One request feeds both flight pages. Routes come from [adsb.lol](https://adsb.lol)'s route database, looked up once per callsign and at most every 10 minutes to stay inside its daily limit. A flight counts as an arrival when the route database says its route ends at the airport, and as a departure when its route starts there. Flights with no published route, such as private jets, are judged by their flight path: descending toward the field on a normal approach slope, or climbing away from it. Light aircraft and helicopters are left out, since most low traffic near an airport is flight training. Aircraft taxiing out show as "Taxi".
+
+Arrivals are followed from one refresh to the next. When one touches down (seen on the ground at the airport, or lost from coverage while low and close on final, since receivers rarely see the runway) it stays on the Arrivals page as "Landed" with its landing time for `LANDED_KEEP_MINUTES` (30 by default).
+
+![Arrivals with landed flights](docs/arrivals.png)
 Trending topics are read from [trends24.in](https://trends24.in), a free, unofficial mirror of X's trends, every 30 minutes. It isn't an X API, so it can change or break without notice. The official [X API trends endpoint](https://docs.x.com/x-api/trends/trends-by-woeid/introduction) costs $0.01 per request.
 
 ## Hardware
@@ -140,5 +144,5 @@ The picker's list is the `AIRPORTS` table at the top of `src/plugins/flights/fli
 
 - The board drivers in `src/drivers/` (`Board_IO.*`, `Touch_FT6336.*`, the ST7796 init sequence) and `src/lv_conf.h` are adapted from Waveshare's [ESP32-C5-Touch-LCD-3.5](https://github.com/waveshareteam/ESP32-C5-Touch-LCD-3.5) examples (Apache-2.0).
 - The fonts are generated from Montserrat (SIL Open Font License) and Font Awesome Free 5 (icons CC BY 4.0, font SIL OFL), as bundled with LVGL.
-- Weather data comes from [Open-Meteo](https://open-meteo.com) (CC BY 4.0). Flight data comes from [adsb.lol](https://adsb.lol) (ODbL). LVGL is MIT-licensed.
+- Weather data comes from [Open-Meteo](https://open-meteo.com) (CC BY 4.0). Flight positions come from [adsb.fi](https://adsb.fi) (free for personal, non-commercial use) and routes from [adsb.lol](https://adsb.lol) (ODbL). LVGL is MIT-licensed.
 - DeskDash itself is released under the Apache License 2.0. See [LICENSE](LICENSE).

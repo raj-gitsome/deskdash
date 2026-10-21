@@ -40,10 +40,13 @@
 #define ARRIVALS_RADIUS_NM      60
 #endif
 #ifndef ARRIVALS_REFRESH_SECONDS
-#define ARRIVALS_REFRESH_SECONDS 240    // adsb.lol allows ~500 requests/day per address
+#define ARRIVALS_REFRESH_SECONDS 60     // positions come from adsb.fi (1 request/second allowed)
 #endif
 #ifndef ARRIVALS_NIGHT_REFRESH_SECONDS
-#define ARRIVALS_NIGHT_REFRESH_SECONDS 900
+#define ARRIVALS_NIGHT_REFRESH_SECONDS ARRIVALS_REFRESH_SECONDS
+#endif
+#ifndef LANDED_KEEP_MINUTES
+#define LANDED_KEEP_MINUTES     30      // how long landed flights stay on the Arrivals page
 #endif
 
 // ---- Plugin interface ------------------------------------------------------------

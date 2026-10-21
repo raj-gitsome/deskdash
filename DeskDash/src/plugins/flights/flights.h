@@ -1,11 +1,17 @@
 // Shared flight data for the Arrivals and Departures plugins.
 //
-// Data: adsb.lol, a free community ADS-B network (no key; ~500 requests/day per address).
-//  1. /v2/point/<lat>/<lon>/<nm> lists every aircraft near the airport.
-//  2. /api/0/routeset looks up each new callsign's route (cached, so once per callsign).
+// Data (free community ADS-B networks, no keys):
+//  1. adsb.fi /api/v3/lat/<lat>/lon/<lon>/dist/<nm> lists every aircraft near the airport
+//     (1 request/second allowed), polled every ARRIVALS_REFRESH_SECONDS.
+//  2. adsb.lol /api/0/routeset looks up each new callsign's route (cached per callsign,
+//     batched at most every 10 minutes because adsb.lol allows ~500 requests/day).
 //  3. A flight whose route ends at the airport is an arrival; one whose route starts there
 //     is a departure. Flights with no published route (private jets, some airline legs) are
 //     judged by their flight path: descending toward the field, or climbing away from it.
+//
+// Arrivals are tracked between fetches: when one touches down (seen on the ground at the
+// airport, or lost from coverage while low on final) it stays listed as "Landed" for
+// LANDED_KEEP_MINUTES.
 //
 // One fetch feeds both pages. The airport is chosen on screen (tap either page's title)
 // and saved on the board; AIRPORT_CODE in config.h is only the first-boot default.
@@ -30,7 +36,8 @@ struct Flight {
   float dist_nm;
   int alt_ft;
   bool on_ground;        // departures only: taxiing out
-  time_t when;           // arrivals: estimated arrival; departures: estimated takeoff; 0 = unknown
+  bool landed;           // arrivals only: has touched down
+  time_t when;           // arrivals: estimated arrival (or landing time); departures: estimated takeoff; 0 = unknown
 };
 
 struct FlightBoard {

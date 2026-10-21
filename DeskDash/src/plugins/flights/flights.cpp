@@ -200,6 +200,59 @@ static float angle_diff(float a, float b) {
 // ============================================================================
 //  Fetch and classify
 // ============================================================================
+// Arrivals followed from fetch to fetch, so a flight can be shown as "Landed".
+struct Tracked {
+  Flight f;
+  time_t last_seen;
+  float last_dst;
+  int last_alt;
+};
+static const int MAX_TRACKED = 40;
+static Tracked tracked[MAX_TRACKED];
+static int n_tracked = 0;
+static int tracked_airport = -1;
+
+static Tracked *track_find(const char *cs) {
+  for (int i = 0; i < n_tracked; i++)
+    if (strcmp(tracked[i].f.callsign, cs) == 0) return &tracked[i];
+  return nullptr;
+}
+
+static Tracked *track_add(const Flight &f, time_t now) {
+  Tracked *t = track_find(f.callsign);
+  if (!t) {
+    if (n_tracked < MAX_TRACKED) {
+      t = &tracked[n_tracked++];
+    } else {                       // full: reuse the oldest landed entry, else the stalest one
+      t = &tracked[0];
+      for (int i = 1; i < n_tracked; i++) {
+        Tracked &c = tracked[i];
+        if ((c.f.landed && !t->f.landed) || (c.f.landed == t->f.landed && c.last_seen < t->last_seen)) t = &c;
+      }
+    }
+    memset(t, 0, sizeof(*t));
+  }
+  char other[4], city[20];         // keep the origin if this fetch has no route for it
+  strcpy(other, t->f.other); strcpy(city, t->f.other_city);
+  t->f = f;
+  if (!t->f.other[0]) { strcpy(t->f.other, other); strcpy(t->f.other_city, city); }
+  t->last_seen = now;
+  t->last_dst = f.dist_nm;
+  t->last_alt = f.alt_ft;
+  return t;
+}
+
+static void track_remove(int i) { tracked[i] = tracked[--n_tracked]; }
+
+static void mark_landed(Tracked &t, time_t at) {
+  if (t.f.landed) return;
+  t.f.landed = true;
+  t.f.when = at;
+  t.f.dist_nm = 0;
+  t.f.alt_ft = 0;
+  Serial.printf("[flights] %s landed\n", t.f.callsign);
+}
+
 struct Candidate {
   char callsign[9], type[5], cat[3];
   bool ground;
@@ -226,8 +279,9 @@ static bool fetch() {
                         "lat", "lon", "dst", "dir"})
     f[k] = true;
   JsonDocument doc;
-  char url[96];
-  snprintf(url, sizeof(url), "https://api.adsb.lol/v2/point/%.4f/%.4f/%d", ap.lat, ap.lon, ARRIVALS_RADIUS_NM);
+  char url[112];
+  snprintf(url, sizeof(url), "https://opendata.adsb.fi/api/v3/lat/%.4f/lon/%.4f/dist/%d",
+           ap.lat, ap.lon, ARRIVALS_RADIUS_NM);
   if (!http_json(url, nullptr, filter, doc)) return false;
 
   static Candidate cand[80];
@@ -317,9 +371,11 @@ static bool fetch() {
   static Flight arr[80], dep[80];
   int na = 0, nd = 0;
   time_t now = time(nullptr);
+  if (tracked_airport != idx) { n_tracked = 0; tracked_airport = idx; }
   for (int i = 0; i < nc; i++) {
     Candidate &c = cand[i];
     RouteEntry *r = route_find(c.callsign);
+    Tracked *tr = track_find(c.callsign);
     int legs = 0, pos = (r && r->known) ? route_position(*r, ap.icao, &legs) : -1;
     bool light = strcmp(c.cat, "A1") == 0 || strcmp(c.cat, "A7") == 0 || c.cat[0] == 'B';
     float to_airport = fmodf(c.dir + 180.0f, 360.0f);   // "dir" = bearing from the airport to the aircraft
@@ -340,7 +396,30 @@ static bool fetch() {
       is_arr = c.rate < -100 && ((close_in && off_in < 90) || (on_slope && c.dst < 45 && off_in < 45));
       is_dep = c.rate > 300 && c.dst < 30 && c.alt <= 400 * c.dst + 5000 && off_out < 45;
     }
+    // Touchdown: a tracked arrival now on the ground here, or a routed arrival taxiing in
+    if (c.ground && (tr || (pos >= 0 && pos == legs - 1 && c.gs > 2))) {
+      if (!tr) {
+        Flight lf;
+        memset(&lf, 0, sizeof(lf));
+        strcpy(lf.callsign, c.callsign);
+        make_display_name(c.callsign, lf.display, sizeof(lf.display));
+        strcpy(lf.type, c.type);
+        route_airport(*r, pos - 1, lf.other, lf.other_city);
+        tr = track_add(lf, now);
+      }
+      tr->last_seen = now;
+      mark_landed(*tr, now);
+      continue;
+    }
+    // A tracked arrival the heuristic lost for a moment (level-off, go-around): keep following it
+    if (!is_arr && !is_dep && tr && !tr->f.landed && !c.ground) {
+      tr->last_seen = now;
+      tr->last_dst = tr->f.dist_nm = c.dst;
+      tr->last_alt = tr->f.alt_ft = c.alt;
+      continue;
+    }
     if (!is_arr && !is_dep) continue;
+    if (is_dep && tr && !tr->f.landed) track_remove(tr - tracked);   // misjudged earlier
 
     Flight &fl = is_arr ? arr[na++] : dep[nd++];
     memset(&fl, 0, sizeof(fl));
@@ -356,7 +435,40 @@ static bool fetch() {
       fl.when = is_arr ? now + minutes * 60 : now - minutes * 60;   // arrival ETA, or roughly when it took off
     }
   }
+  for (int i = 0; i < na; i++) {
+    Tracked *t = track_find(arr[i].callsign);
+    if (t && t->f.landed) continue;          // already down; ignore a stray airborne report
+    track_add(arr[i], now);
+  }
+
+  // Arrivals that dropped out of coverage: low and close means they landed (receivers
+  // rarely see aircraft on the runway); otherwise give them 10 minutes, then drop them.
+  for (int i = n_tracked - 1; i >= 0; i--) {
+    Tracked &t = tracked[i];
+    if (t.f.landed) {
+      if (now - t.f.when > LANDED_KEEP_MINUTES * 60L) track_remove(i);
+      continue;
+    }
+    if (t.last_seen == now) continue;
+    if (t.last_dst < 8 && t.last_alt < 3000) {
+      time_t at = t.f.when ? t.f.when : t.last_seen;
+      if (at < t.last_seen) at = t.last_seen;
+      if (at > now) at = now;
+      mark_landed(t, at);
+    } else if (now - t.last_seen > 600) {
+      track_remove(i);
+    }
+  }
+
+  // Arrivals list: still inbound (soonest first), then landed (most recent first)
+  na = 0;
+  int n_landed = 0;
+  for (int i = 0; i < n_tracked; i++) if (!tracked[i].f.landed) arr[na++] = tracked[i].f;
   sort_by_when(arr, na);
+  for (int i = 0; i < n_tracked; i++) if (tracked[i].f.landed) { arr[na + n_landed++] = tracked[i].f; }
+  for (int i = na; i < na + n_landed; i++)
+    for (int j = i + 1; j < na + n_landed; j++)
+      if (arr[j].when > arr[i].when) { Flight t = arr[i]; arr[i] = arr[j]; arr[j] = t; }
   // departures: taxiing first, then most recent takeoff first
   for (int i = 0; i < nd; i++)
     for (int j = i + 1; j < nd; j++) {
@@ -364,7 +476,7 @@ static bool fetch() {
                   (dep[j].on_ground == dep[i].on_ground && dep[j].when > dep[i].when);
       if (swap) { Flight t = dep[i]; dep[i] = dep[j]; dep[j] = t; }
     }
-  for (int i = 0; i < na && nb.n_arr < MAX_FLIGHTS; i++) nb.arr[nb.n_arr++] = arr[i];
+  for (int i = 0; i < na + n_landed && nb.n_arr < MAX_FLIGHTS; i++) nb.arr[nb.n_arr++] = arr[i];
   for (int i = 0; i < nd && nb.n_dep < MAX_FLIGHTS; i++) nb.dep[nb.n_dep++] = dep[i];
   nb.updated = now;
 
@@ -375,7 +487,7 @@ static bool fetch() {
     }
     ui_unlock();
   }
-  Serial.printf("[flights] %s: %d aircraft nearby, %d arriving, %d departing\n", ap.iata, nearby, na, nd);
+  Serial.printf("[flights] %s: %d aircraft nearby, %d arriving, %d landed, %d departing\n", ap.iata, nearby, na, n_landed, nd);
   return true;
 }
 
@@ -408,7 +520,7 @@ static void picker_save(lv_event_t *e) {
   if (idx == airport_idx) return;
   airport_idx = idx;
   dd_setting_set("airport", AIRPORTS[idx].iata);
-  board = FlightBoard();       // clear the old airport's flights
+  board = FlightBoard();       // clear the old airport's flights (tracking resets on next fetch)
   version++;
   refetch_now = true;
   Serial.printf("[flights] airport set to %s\n", AIRPORTS[idx].iata);
@@ -489,7 +601,7 @@ void flights_build_page(FlightPage &pg, lv_obj_t *p, bool arrivals) {
     lv_coord_t y = 90 + i * 57;
     pg.name[i] = make_label(p, &font_text_24, COL_TEXT, LV_ALIGN_TOP_LEFT, 20, y, "");
     lv_label_set_long_mode(pg.name[i], LV_LABEL_LONG_DOT);
-    lv_obj_set_width(pg.name[i], 200);
+    lv_obj_set_width(pg.name[i], 190);
     pg.time[i] = make_label(p, &font_text_24, arrivals ? COL_ACCENT : COL_GOOD, LV_ALIGN_TOP_RIGHT, -20, y, "");
     pg.info[i] = make_label(p, &font_text_18, COL_MUTED, LV_ALIGN_TOP_LEFT, 20, y + 28, "");
     lv_label_set_long_mode(pg.info[i], LV_LABEL_LONG_DOT);
@@ -528,9 +640,11 @@ void flights_tick_page(FlightPage &pg) {
     }
     const Flight &f = list[i];
     lv_label_set_text(pg.name[i], f.display);
-    if (f.on_ground)  snprintf(buf, sizeof(buf), "Taxi");
-    else if (f.when)  format_time(buf, sizeof(buf), f.when, false);
-    else              buf[0] = 0;
+    lv_obj_set_style_text_color(pg.time[i], (!pg.arrivals || f.landed) ? COL_GOOD : COL_ACCENT, 0);
+    if (f.landed)          snprintf(buf, sizeof(buf), "Landed");
+    else if (f.on_ground)  snprintf(buf, sizeof(buf), "Taxi");
+    else if (f.when)       format_time(buf, sizeof(buf), f.when, false);
+    else                   buf[0] = 0;
     lv_label_set_text(pg.time[i], buf);
 
     char place[32];
@@ -542,7 +656,13 @@ void flights_tick_page(FlightPage &pg) {
     if (f.on_ground)          snprintf(alt, sizeof(alt), "on ground");
     else if (f.alt_ft >= 1000) snprintf(alt, sizeof(alt), "%.1fk ft", f.alt_ft / 1000.0f);
     else                      snprintf(alt, sizeof(alt), "%d ft", f.alt_ft);
-    snprintf(buf, sizeof(buf), "%s " DOT " %.0f nm " DOT " %s", place, f.dist_nm, alt);
+    if (f.landed) {
+      char at[16];
+      format_time(at, sizeof(at), f.when, false);
+      snprintf(buf, sizeof(buf), "%s " DOT " landed %s", place, at);
+    } else {
+      snprintf(buf, sizeof(buf), "%s " DOT " %.0f nm " DOT " %s", place, f.dist_nm, alt);
+    }
     lv_label_set_text(pg.info[i], buf);
   }
 }
