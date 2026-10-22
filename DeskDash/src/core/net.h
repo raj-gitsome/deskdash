@@ -27,5 +27,9 @@ struct PsramBody {
 // Stops at max_bytes. Returns false if nothing was read.
 bool dd_read_body(HTTPClient &http, PsramBody &out, size_t max_bytes = 256 * 1024);
 
-// Logs the lowest internal free memory seen so far, and any failed allocation.
+// Logs where large allocations land and any failed allocation.
 void dd_mem_watch_begin();
+
+// Moves TLS (HTTPS) buffers to PSRAM. Each HTTPS connection otherwise takes ~65 KB of the
+// ~80 KB internal RAM that Wi-Fi also needs. Call once in setup(), before any HTTPS.
+void dd_tls_use_psram();

@@ -202,6 +202,7 @@ void setup() {
   delay(300);
   Serial.printf("\nDeskDash starting, %d pages (last reset: %d)\n", PAGE_COUNT, (int)esp_reset_reason());
   dd_mem_watch_begin();
+  dd_tls_use_psram();
 
   // Board power, resets and backlight live on the CH32V006 I/O expander
   if (!Board_IO_Init(Wire)) Serial.println("[board] CH32V006 I/O expander not found");

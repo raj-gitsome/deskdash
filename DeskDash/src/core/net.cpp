@@ -1,6 +1,7 @@
 #include "net.h"
 #include <esp_heap_caps.h>
 #include <esp_memory_utils.h>
+#include <mbedtls/platform.h>
 
 namespace {
 struct SpiRamAllocator : ArduinoJson::Allocator {
@@ -54,6 +55,19 @@ void failed_alloc(size_t size, uint32_t caps, const char *function) {
                 (unsigned)caps, function ? function : "?", (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
 }
 }  // namespace
+
+static void *tls_calloc(size_t n, size_t size) {
+  size_t total = n * size;
+  if (total >= 512) {
+    void *p = heap_caps_calloc(n, size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (p) return p;
+  }
+  return heap_caps_calloc(n, size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+}
+
+static void tls_free(void *p) { heap_caps_free(p); }
+
+void dd_tls_use_psram() { mbedtls_platform_set_calloc_free(tls_calloc, tls_free); }
 
 ArduinoJson::Allocator *dd_psram_json() { return &spiram_allocator; }
 
