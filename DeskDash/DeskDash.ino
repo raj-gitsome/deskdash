@@ -51,9 +51,12 @@ static void update_dots(int active) {
 
 static uint32_t page_shown_ms = 0;     // when the current page appeared (for auto-cycling)
 
+static volatile int current_page = 0;
+
 static void tileview_changed_cb(lv_event_t *e) {
   page_shown_ms = millis();
-  update_dots(lv_obj_get_x(lv_tileview_get_tile_act(tileview)) / SCREEN_W);
+  current_page = lv_obj_get_x(lv_tileview_get_tile_act(tileview)) / SCREEN_W;
+  update_dots(current_page);
 }
 
 static void build_ui() {
@@ -196,7 +199,7 @@ static void wifi_scan_report() {
 void setup() {
   Serial.begin(115200);
   delay(300);
-  Serial.printf("\nDeskDash starting, %d pages\n", PAGE_COUNT);
+  Serial.printf("\nDeskDash starting, %d pages (last reset: %d)\n", PAGE_COUNT, (int)esp_reset_reason());
 
   // Board power, resets and backlight live on the CH32V006 I/O expander
   if (!Board_IO_Init(Wire)) Serial.println("[board] CH32V006 I/O expander not found");
@@ -247,7 +250,11 @@ void setup() {
   // Wi-Fi and time
   WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t info) {
     if (event == ARDUINO_EVENT_WIFI_STA_DISCONNECTED)
-      Serial.printf("[wifi] disconnected, reason %d\n", info.wifi_sta_disconnected.reason);
+      Serial.printf("[wifi] disconnected, reason %d (%s), rssi %d, page %s, up %lus, free internal %u\n",
+                    info.wifi_sta_disconnected.reason,
+                    WiFi.disconnectReasonName((wifi_err_reason_t)info.wifi_sta_disconnected.reason),
+                    info.wifi_sta_disconnected.rssi, PAGES[current_page]->name, (unsigned long)(millis() / 1000),
+                    (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
     else if (event == ARDUINO_EVENT_WIFI_STA_GOT_IP)
       Serial.printf("[wifi] connected, IP %s\n", WiFi.localIP().toString().c_str());
   });
@@ -258,7 +265,22 @@ void setup() {
   configTzTime(TIMEZONE, "pool.ntp.org", "time.nist.gov");
 }
 
+// Health line every 30 s, to diagnose drops: memory, Wi-Fi state and which page is showing
+static void diag_report() {
+  static uint32_t last = 0;
+  if (millis() - last < 30000) return;
+  last = millis();
+  Serial.printf("[diag] up %lus, page %s, wifi %s %d dBm ch %d, internal free %u min %u largest %u, psram free %u\n",
+                (unsigned long)(millis() / 1000), PAGES[current_page]->name,
+                WiFi.status() == WL_CONNECTED ? "up" : "DOWN", (int)WiFi.RSSI(), (int)WiFi.channel(),
+                (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
+                (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
+                (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+}
+
 void loop() {
+  diag_report();
   static uint32_t wifi_lost_since = 0;
   if (WiFi.status() == WL_CONNECTED) {
     wifi_lost_since = 0;
