@@ -55,8 +55,10 @@ static uint32_t page_shown_ms = 0;     // when the current page appeared (for au
 static volatile int current_page = 0;
 
 static void tileview_changed_cb(lv_event_t *e) {
+  lv_obj_t *tile = lv_tileview_get_tile_act(tileview);
+  if (!tile) return;
   page_shown_ms = millis();
-  current_page = lv_obj_get_x(lv_tileview_get_tile_act(tileview)) / SCREEN_W;
+  current_page = lv_obj_get_x(tile) / SCREEN_W;
   update_dots(current_page);
 }
 
@@ -78,6 +80,7 @@ static void build_ui() {
     lv_obj_clear_flag(tile, LV_OBJ_FLAG_SCROLLABLE);
     if (PAGES[i]->build) PAGES[i]->build(tile);
   }
+  lv_obj_set_tile_id(tileview, 0, 0, LV_ANIM_OFF);   // gives LVGL an active tile from the start
 
   lv_obj_t *dot_row = lv_obj_create(scr);
   lv_obj_remove_style_all(dot_row);
@@ -124,9 +127,11 @@ static void tick_timer_cb(lv_timer_t *t) {
     if (in_use || popup) {
       page_shown_ms = millis();
     } else if (millis() - page_shown_ms >= cycle_ms) {
-      int cur = lv_obj_get_x(lv_tileview_get_tile_act(tileview)) / SCREEN_W;
-      int next = (cur + 1) % PAGE_COUNT;
+      // Uses our own page number: LVGL has no "active tile" until the first swipe, and
+      // reading it before then crashed the board (and dropped Wi-Fi) a minute after boot.
+      int next = (current_page + 1) % PAGE_COUNT;
       lv_obj_set_tile_id(tileview, next, 0, next == 0 ? LV_ANIM_OFF : LV_ANIM_ON);
+      current_page = next;
       update_dots(next);
       page_shown_ms = millis();
     }
@@ -268,7 +273,7 @@ void setup() {
   configTzTime(TIMEZONE, "pool.ntp.org", "time.nist.gov");
 }
 
-// Health line every 30 s, to diagnose drops: memory, Wi-Fi state and which page is showing
+// Health line every 5 minutes: memory, Wi-Fi state and which page is showing
 static void diag_report() {
   static size_t low_reported = SIZE_MAX;
   size_t low = heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL);
@@ -277,7 +282,7 @@ static void diag_report() {
     Serial.printf("[mem] internal RAM low-water mark %u bytes (page %s)\n", (unsigned)low, PAGES[current_page]->name);
   }
   static uint32_t last = 0;
-  if (millis() - last < 30000) return;
+  if (last && millis() - last < 300000) return;   // every 5 minutes
   last = millis();
   Serial.printf("[diag] up %lus, page %s, wifi %s %d dBm ch %d, internal free %u min %u largest %u, psram free %u\n",
                 (unsigned long)(millis() / 1000), PAGES[current_page]->name,
