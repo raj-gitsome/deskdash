@@ -74,6 +74,7 @@ softwareupdate --install-rosetta --agree-to-license
 - **I2C (SDA 27, SCL 26):** all I2C traffic (touch, backlight PWM through the CH32V006, AXP2101 battery status, SHTC3) runs on the LVGL task, so the bus is never shared between threads.
 - **Weather:** the board fetches weather over plain HTTP from Open-Meteo every 15 minutes.
 - **News:** feeds are read as a stream, so a large feed is never held in memory: the board parses the first 6 items (RSS `<item>` or Atom `<entry>`) and closes the connection. Each item's title, link (RSS `<link>`, Atom `<link rel="alternate" href>`, or a permalink `<guid>`), summary and date are kept. It follows redirects (including between http and https), keeps CDATA, decodes HTML entities, and turns curly quotes, dashes and accented letters into characters the fonts can draw. Dates in RFC 822 (RSS) and ISO 8601 (Atom) are both understood.
+- **Memory:** the ESP32-C5 has about 80 KB of internal RAM left once Wi-Fi and the display are running, and Wi-Fi needs it. Each HTTPS connection would otherwise take around 65 KB of it, so TLS buffers, HTTP response bodies and JSON documents are all placed in PSRAM (`src/core/net.*`). The board logs a line if internal RAM reaches a new low or an allocation fails, plus a health line every 5 minutes.
 - **Fonts:** Montserrat and Font Awesome 5 glyphs, generated with [`lv_font_conv`](https://github.com/lvgl/lv_font_conv) at the sizes this screen needs.
 - **Indoor sensor:** the SHTC3 sits on the board, so its temperature reading runs a few degrees warm from the board's own heat.
 
