@@ -1,4 +1,5 @@
-// News page: the latest headlines from RSS and Atom feeds.
+// News page: the latest headlines from RSS and Atom feeds. Tap a headline to see its summary
+// and a QR code that opens the full article on your phone.
 //
 // A set of popular news feeds is built in and switched on. Tap the page title to manage
 // feeds: switch any feed on or off, search for more by name or topic (Feedly's public
@@ -27,7 +28,7 @@ static const DefaultFeed DEFAULTS[] = {
   {"CNBC",            "https://www.cnbc.com/id/100003114/device/rss/rss.html"},
   {"Ars Technica",    "https://feeds.arstechnica.com/arstechnica/index"},
   {"ESPN",            "https://www.espn.com/espn/rss/news"},
-  {"Hacker News",     "https://hnrss.org/frontpage"},
+  {"Hacker News",     "https://news.ycombinator.com/rss"},
 };
 static constexpr int N_DEFAULTS = sizeof(DEFAULTS) / sizeof(DEFAULTS[0]);
 static constexpr int MAX_ADDED = 12;
@@ -46,6 +47,8 @@ struct Feed {
 
 struct Headline {
   char title[160];
+  char link[224];
+  char summary[240];
   time_t when;
 };
 
@@ -352,6 +355,43 @@ static bool skip_tag(Reader &r, int c) {
   return prev == '/';
 }
 
+// Like skip_tag, but keeps the href and rel attributes (Atom <link href="..." rel="..."/>)
+static bool read_link_attrs(Reader &r, int c, char *href, int hn, char *rel, int rn) {
+  char name[12] = "";
+  int nl = 0, prev = 0;
+  href[0] = rel[0] = 0;
+  while (c >= 0 && c != '>') {
+    if (c == '"' || c == '\'') {
+      int q = c, o = 0;
+      char *dst = strcmp(name, "href") == 0 ? href : strcmp(name, "rel") == 0 ? rel : nullptr;
+      int dn = dst == href ? hn : rn;
+      while ((c = r.get()) >= 0 && c != q)
+        if (dst && o + 1 < dn) dst[o++] = (char)c;
+      if (dst) dst[o] = 0;
+      nl = 0;
+      name[0] = 0;
+    } else if (isalnum(c) || c == ':' || c == '_' || c == '-') {
+      if (nl + 1 < (int)sizeof(name)) { name[nl++] = (char)c; name[nl] = 0; }
+    } else if (c != '=') {
+      nl = 0;
+      if (c != ' ' && c != '\n' && c != '\t' && c != '\r') name[0] = 0;
+    }
+    prev = c;
+    c = r.get();
+  }
+  return prev == '/';
+}
+
+static void set_link(char *dst, const char *src) {
+  while (*src == ' ' || *src == '\n' || *src == '\r' || *src == '\t') src++;
+  if (strncmp(src, "http", 4) != 0) return;
+  int o = 0;
+  for (; src[o] && o < 223 && src[o] != ' ' && src[o] != '\n' && src[o] != '\r'; o++) dst[o] = src[o];
+  dst[o] = 0;
+  // &amp; in a URL is just &
+  for (char *a = strstr(dst, "&amp;"); a; a = strstr(a + 1, "&amp;")) memmove(a + 1, a + 5, strlen(a + 5) + 1);
+}
+
 // Text of an element up to its closing tag; CDATA kept, inline tags dropped
 static void read_text(Reader &r, char *out, int n) {
   int o = 0, c;
@@ -399,7 +439,7 @@ static int read_name(Reader &r, char *name, int n) {
 }
 
 static void parse_feed(Reader &r, FeedNews &out) {
-  static char raw[640];
+  static char raw[1200];
   bool in_item = false;
   Headline cur;
   int c;
@@ -412,7 +452,13 @@ static void parse_feed(Reader &r, FeedNews &out) {
     if (name[0] == '!' || name[0] == '?') { skip_tag(r, end); continue; }
     bool closing = name[0] == '/';
     const char *nm = closing ? name + 1 : name;
-    bool self_closing = skip_tag(r, end);
+    bool self_closing;
+    char href[224], rel[16];
+    href[0] = rel[0] = 0;
+    if (in_item && !closing && strcmp(nm, "link") == 0)
+      self_closing = read_link_attrs(r, end, href, sizeof(href), rel, sizeof(rel));
+    else
+      self_closing = skip_tag(r, end);
     bool item_tag = strcmp(nm, "item") == 0 || strcmp(nm, "entry") == 0;
     if (item_tag && !closing && !self_closing) {
       in_item = true;
@@ -427,10 +473,31 @@ static void parse_feed(Reader &r, FeedNews &out) {
       in_item = false;
       continue;
     }
-    if (!in_item || closing || self_closing) continue;
+    if (!in_item || closing) continue;
+    if (strcmp(nm, "link") == 0) {
+      if (href[0]) {                                     // Atom
+        if (!cur.link[0] && (!rel[0] || strcmp(rel, "alternate") == 0)) set_link(cur.link, href);
+      }
+      if (!self_closing) {                               // RSS: <link>url</link>
+        read_text(r, raw, sizeof(raw));
+        if (!cur.link[0]) set_link(cur.link, raw);
+      }
+      continue;
+    }
+    if (self_closing) continue;
     if (strcmp(nm, "title") == 0) {
       read_text(r, raw, sizeof(raw));
       clean_text(raw, cur.title, sizeof(cur.title));
+    } else if (strcmp(nm, "feedburner:origLink") == 0) {
+      read_text(r, raw, sizeof(raw));
+      set_link(cur.link, raw);
+    } else if (strcmp(nm, "guid") == 0 || strcmp(nm, "id") == 0) {
+      read_text(r, raw, sizeof(raw));
+      if (!cur.link[0]) set_link(cur.link, raw);
+    } else if (!cur.summary[0] && (strcmp(nm, "description") == 0 || strcmp(nm, "summary") == 0)) {
+      read_text(r, raw, sizeof(raw));
+      clean_text(raw, cur.summary, sizeof(cur.summary));
+      if (strlen(cur.summary) < 25) cur.summary[0] = 0;   // e.g. just "Comments"
     } else if (strcmp(nm, "pubDate") == 0 || strcmp(nm, "published") == 0 || strcmp(nm, "dc:date") == 0 ||
                (strcmp(nm, "updated") == 0 && !cur.when)) {
       read_text(r, raw, sizeof(raw));
@@ -591,7 +658,9 @@ static void poll() {
   if (!url[0]) return;
 
   last_fetch = millis();
-  static FeedNews got;
+  static FeedNews *gotp = (FeedNews *)ps_malloc(sizeof(FeedNews));
+  if (!gotp) return;
+  FeedNews &got = *gotp;
   memset(&got, 0, sizeof(got));
   strcpy(got.url, url);
   bool ok = fetch_feed(url, got);
@@ -861,9 +930,83 @@ static void open_mgr(lv_event_t *e) {
 //  Page
 // ============================================================================
 static lv_obj_t *lbl_title, *lbl_status, *lbl_empty;
-static lv_obj_t *lbl_head[ROWS], *lbl_meta[ROWS];
+static lv_obj_t *lbl_head[ROWS], *lbl_meta[ROWS], *row_hit[ROWS];
+static const Headline *row_item[ROWS];
+static int row_feed[ROWS];
 static uint32_t shown = 0;
 static uint32_t shown_ms = 0;
+
+static void format_age(char *out, size_t n, time_t when);
+
+// ---- Article card: headline, source, summary and a QR code for the link ----------------
+static lv_obj_t *article = nullptr;
+static lv_timer_t *article_timer = nullptr;
+
+static void close_article(lv_event_t *e) {
+  if (article) lv_obj_del_async(article);
+  article = nullptr;
+  if (article_timer) { lv_timer_del(article_timer); article_timer = nullptr; }
+}
+
+// Pages stop cycling while a card is open, so close it by itself after 2 minutes
+static void article_timeout(lv_timer_t *t) {
+  article_timer = nullptr;           // a one-shot timer deletes itself
+  close_article(nullptr);
+}
+
+static void open_article(lv_event_t *e) {
+  int row = (int)(intptr_t)lv_event_get_user_data(e);
+  if (article || row < 0 || row >= ROWS || !row_item[row]) return;
+  const Headline &h = *row_item[row];
+  article = lv_obj_create(lv_layer_top());
+  lv_obj_remove_style_all(article);
+  lv_obj_set_size(article, SCREEN_W, SCREEN_H);
+  lv_obj_set_style_bg_color(article, COL_BG, 0);
+  lv_obj_set_style_bg_opa(article, LV_OPA_COVER, 0);
+  lv_obj_add_flag(article, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_clear_flag(article, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_event_cb(article, close_article, LV_EVENT_CLICKED, NULL);   // tap anywhere to close
+  article_timer = lv_timer_create(article_timeout, 120000, NULL);
+  lv_timer_set_repeat_count(article_timer, 1);
+
+  char buf[96], age[16];
+  format_age(age, sizeof(age), h.when);
+  snprintf(buf, sizeof(buf), "%s  " DOT "  %s", feeds[row_feed[row]].name, age);
+  make_label(article, &font_text_18, COL_ACCENT, LV_ALIGN_TOP_LEFT, 18, 18, buf);
+
+  lv_obj_t *t = make_label(article, &font_text_24, COL_TEXT, LV_ALIGN_TOP_LEFT, 18, 46, h.title);
+  lv_label_set_long_mode(t, LV_LABEL_LONG_DOT);
+  lv_obj_set_style_text_line_space(t, 2, 0);
+  lv_obj_set_width(t, 284);
+  lv_obj_update_layout(t);
+  if (lv_obj_get_height(t) > 120) lv_obj_set_height(t, 120);       // at most 4 lines
+  lv_obj_update_layout(t);
+  lv_coord_t y = 46 + lv_obj_get_height(t) + 10;
+
+  bool has_link = h.link[0] != 0;
+  lv_coord_t qr_top = SCREEN_H - 214;
+  if (h.summary[0]) {
+    lv_obj_t *sm = make_label(article, &font_text_18, COL_MUTED, LV_ALIGN_TOP_LEFT, 18, y, h.summary);
+    lv_label_set_long_mode(sm, LV_LABEL_LONG_DOT);
+    lv_obj_set_style_text_line_space(sm, 2, 0);
+    lv_obj_set_width(sm, 284);
+    lv_obj_update_layout(sm);
+    lv_coord_t room = (has_link ? qr_top - 8 : SCREEN_H - 40) - y;
+    if (lv_obj_get_height(sm) > room) lv_obj_set_height(sm, room > 22 ? room - room % 22 : 22);
+  }
+
+  if (has_link) {
+    lv_obj_t *qr = lv_qrcode_create(article, 156, lv_color_hex(0x000000), lv_color_hex(0xFFFFFF));
+    lv_qrcode_update(qr, h.link, strlen(h.link));
+    lv_obj_align(qr, LV_ALIGN_TOP_MID, 0, qr_top);
+    lv_obj_set_style_border_color(qr, lv_color_hex(0xFFFFFF), 0);   // quiet zone so phones can read it
+    lv_obj_set_style_border_width(qr, 8, 0);
+    lv_obj_clear_flag(qr, LV_OBJ_FLAG_CLICKABLE);
+    make_label(article, &font_text_18, COL_MUTED, LV_ALIGN_BOTTOM_MID, 0, -14, "Scan to read  " DOT "  tap to close");
+  } else {
+    make_label(article, &font_text_18, COL_MUTED, LV_ALIGN_BOTTOM_MID, 0, -14, "No link in this feed  " DOT "  tap to close");
+  }
+}
 
 static void build(lv_obj_t *p) {
   load_settings();
@@ -882,6 +1025,14 @@ static void build(lv_obj_t *p) {
     lbl_meta[i] = make_label(p, &font_text_18, COL_MUTED, LV_ALIGN_TOP_LEFT, 18, y + 43, "");
     lv_label_set_long_mode(lbl_meta[i], LV_LABEL_LONG_DOT);
     lv_obj_set_width(lbl_meta[i], 284);
+    // Invisible tap target over the whole headline; swipes still change pages
+    row_hit[i] = lv_obj_create(p);
+    lv_obj_remove_style_all(row_hit[i]);
+    lv_obj_set_size(row_hit[i], SCREEN_W - 16, 66);
+    lv_obj_set_pos(row_hit[i], 8, y - 2);
+    lv_obj_add_flag(row_hit[i], LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(row_hit[i], open_article, LV_EVENT_CLICKED, (void *)(intptr_t)i);
+    row_item[i] = nullptr;
   }
 }
 
@@ -925,9 +1076,15 @@ static void tick() {
     format_age(age, sizeof(age), picks[i].h->when);
     snprintf(buf, sizeof(buf), "%s  " DOT "  %s", feeds[picks[i].feed].name, age);
     lv_label_set_text(lbl_meta[row], buf);
+    row_item[row] = picks[i].h;
+    row_feed[row] = picks[i].feed;
     row++;
   }
-  for (; row < ROWS; row++) { lv_label_set_text(lbl_head[row], ""); lv_label_set_text(lbl_meta[row], ""); }
+  for (; row < ROWS; row++) {
+    lv_label_set_text(lbl_head[row], "");
+    lv_label_set_text(lbl_meta[row], "");
+    row_item[row] = nullptr;
+  }
 
   if (!on) {
     lv_label_set_text(lbl_status, "tap title to choose feeds");
@@ -984,6 +1141,17 @@ void news_preview_open_manager(bool with_results, bool keyboard) {
   open_mgr(nullptr);
   if (keyboard) show_keyboard(true);
 }
+void news_preview_open_article(int row) {
+  if (row_item[row]) {
+    Headline *h = (Headline *)row_item[row];
+    snprintf(h->link, sizeof(h->link), "https://www.npr.org/2026/10/22/nx-s1-5541234/senate-stopgap-funding-shutdown");
+    snprintf(h->summary, sizeof(h->summary), "The bill keeps the government open through mid-December and gives negotiators more time to work out full-year spending, after a late deal between leaders of both parties.");
+  }
+  lv_event_t e;
+  memset(&e, 0, sizeof(e));
+  e.user_data = (void *)(intptr_t)row;
+  open_article(&e);
+}
 void news_preview_close() { mgr = mgr_list = mgr_ta = mgr_kb = mgr_done = nullptr; search_state = 0; }
 // Runs the feed parser over any Client (the preview feeds it a file)
 int news_preview_parse(Client *c, char titles[][160], long *whens) {
@@ -994,7 +1162,11 @@ int news_preview_parse(Client *c, char titles[][160], long *whens) {
   static FeedNews out;
   memset(&out, 0, sizeof(out));
   parse_feed(r, out);
-  for (int i = 0; i < out.n; i++) { strcpy(titles[i], out.h[i].title); whens[i] = (long)out.h[i].when; }
+  for (int i = 0; i < out.n; i++) {
+    strcpy(titles[i], out.h[i].title);
+    whens[i] = (long)out.h[i].when;
+    printf("    link=%s | summary=%.60s\n", out.h[i].link, out.h[i].summary);
+  }
   return out.n;
 }
 #endif

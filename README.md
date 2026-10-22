@@ -12,16 +12,16 @@ Every page is a **plugin**: a self-contained folder under `DeskDash/src/plugins/
 | `weather` | Conditions, high/low, feels-like, humidity, wind, next 4 hours |
 | `arrivals` | Flights arriving at your airport: airline and flight number, origin, distance, altitude and estimated arrival time |
 | `departures` | Flights leaving your airport: taxiing out or climbing away, with destination and takeoff time |
-| `news` | The latest headlines from RSS and Atom news feeds, with the source and how long ago each was posted |
+| `news` | The latest headlines from RSS and Atom news feeds, with the source and how long ago each was posted. Tap a headline for its summary and a QR code that opens the article on your phone |
 | `system` | Wi-Fi name, signal, IP, battery, indoor reading, uptime, last weather update, brightness slider |
 
 Swipe left or right to change pages. On the Arrivals or Departures page, **tap the title to choose another airport**. The choice is saved on the board and applies to both pages.
 
 <img src="docs/airport-picker.png" width="220" alt="Airport picker">
 
-On the News page, **tap the title to manage feeds**. Switch any feed on or off, or tap the search box to search for more by name or topic (for example "nasa" or "formula 1") with the on-screen keyboard, then tap **Add**. Feeds you added have an **x** to remove them. Your choices are saved on the board.
+On the News page, **tap a headline** to open it: you get the full headline, a short summary and a QR code. Scan the code with your phone's camera to read the article. Tap anywhere to go back; the card also closes by itself after 2 minutes so the pages keep cycling. **Tap the title to manage feeds**. Switch any feed on or off, or tap the search box to search for more by name or topic (for example "nasa" or "formula 1") with the on-screen keyboard, then tap **Add**. Feeds you added have an **x** to remove them. Your choices are saved on the board.
 
-![News page and feed manager](docs/news.png)
+![News page, an article card and the feed manager](docs/news.png)
 
 To prevent burn-in, the display moves to the next page every minute (`AUTO_CYCLE_SECONDS` in `config.h`, 0 turns it off). It waits while you are using the screen: any touch, or the airport picker being open, holds the current page for another minute. The screen dims between 10 PM and 7 AM, and a tap brightens it for 30 seconds.
 Weather comes from [Open-Meteo](https://open-meteo.com), which is free and needs no API key. Time comes from NTP.
@@ -73,7 +73,7 @@ softwareupdate --install-rosetta --agree-to-license
 - **LVGL 8.4:** LVGL runs in its own FreeRTOS task, with a mutex around every UI change. The draw buffers are two 40-line buffers in internal DMA-capable RAM. A full-screen buffer in PSRAM fails once Wi-Fi is running, because the SPI driver can't find internal memory to bounce it through. LVGL's object heap lives in PSRAM (`LV_MEM_CUSTOM`), which keeps about 64 KB of internal RAM free for Wi-Fi and TLS.
 - **I2C (SDA 27, SCL 26):** all I2C traffic (touch, backlight PWM through the CH32V006, AXP2101 battery status, SHTC3) runs on the LVGL task, so the bus is never shared between threads.
 - **Weather:** the board fetches weather over plain HTTP from Open-Meteo every 15 minutes.
-- **News:** feeds are read as a stream, so a large feed is never held in memory: the board parses the first 6 items (RSS `<item>` or Atom `<entry>`) and closes the connection. It follows redirects (including between http and https), keeps CDATA, decodes HTML entities, and turns curly quotes, dashes and accented letters into characters the fonts can draw. Dates in RFC 822 (RSS) and ISO 8601 (Atom) are both understood.
+- **News:** feeds are read as a stream, so a large feed is never held in memory: the board parses the first 6 items (RSS `<item>` or Atom `<entry>`) and closes the connection. Each item's title, link (RSS `<link>`, Atom `<link rel="alternate" href>`, or a permalink `<guid>`), summary and date are kept. It follows redirects (including between http and https), keeps CDATA, decodes HTML entities, and turns curly quotes, dashes and accented letters into characters the fonts can draw. Dates in RFC 822 (RSS) and ISO 8601 (Atom) are both understood.
 - **Fonts:** Montserrat and Font Awesome 5 glyphs, generated with [`lv_font_conv`](https://github.com/lvgl/lv_font_conv) at the sizes this screen needs.
 - **Indoor sensor:** the SHTC3 sits on the board, so its temperature reading runs a few degrees warm from the board's own heat.
 
