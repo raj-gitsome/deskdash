@@ -33,14 +33,6 @@
 #define ARRIVALS_REFRESH_SECONDS 60     // adsb.fi allows 1 request a second
 #define LANDED_KEEP_MINUTES     30      // landed flights stay on the Arrivals page this long
 
-// ---- Trending on X ---------------------------------------------------------
-// Scraped from trends24.in (free, unofficial). Use the country/city path from that site,
-// e.g. "united-states", "united-states/miami", or "" for worldwide.
-#define TRENDS_LOCATION         "united-states"
-#define TRENDS_LOCATION_NAME    "United States"
-#define TRENDS_REFRESH_MINUTES  30
-#define TRENDS_COUNT            10
-
 // ---- Weather refresh -------------------------------------------------------
 #define WEATHER_REFRESH_MINUTES 15
 

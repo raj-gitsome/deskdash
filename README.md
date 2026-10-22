@@ -12,7 +12,6 @@ Every page is a **plugin**: a self-contained folder under `DeskDash/src/plugins/
 | `weather` | Conditions, high/low, feels-like, humidity, wind, next 4 hours |
 | `arrivals` | Flights arriving at your airport: airline and flight number, origin, distance, altitude and estimated arrival time |
 | `departures` | Flights leaving your airport: taxiing out or climbing away, with destination and takeoff time |
-| `trends` | Top 10 trending topics on X in the US (or any location) |
 | `system` | Wi-Fi name, signal, IP, battery, indoor reading, uptime, last weather update, brightness slider |
 
 Swipe left or right to change pages. On the Arrivals or Departures page, **tap the title to choose another airport**. The choice is saved on the board and applies to both pages.
@@ -26,7 +25,6 @@ Live flight positions come from [adsb.fi](https://adsb.fi), a free community ADS
 Arrivals are followed from one refresh to the next. When one touches down (seen on the ground at the airport, or lost from coverage while low and close on final, since receivers rarely see the runway) it stays on the Arrivals page as "Landed" with its landing time for `LANDED_KEEP_MINUTES` (30 by default).
 
 ![Arrivals with landed flights](docs/arrivals.png)
-Trending topics are read from [trends24.in](https://trends24.in), a free, unofficial mirror of X's trends, every 30 minutes. It isn't an X API, so it can change or break without notice. The official [X API trends endpoint](https://docs.x.com/x-api/trends/trends-by-woeid/introduction) costs $0.01 per request.
 
 ## Hardware
 
@@ -38,7 +36,7 @@ Trending topics are read from [trends24.in](https://trends24.in), a free, unoffi
 
 1. **Board package:** install **esp32 by Espressif Systems**, version 3.3.x (Waveshare tests with 3.3.10).
 2. **Library:** install **ArduinoJson 7.x** by Benoit Blanchon. LVGL 8.4 is bundled in `DeskDash/src/`, so it doesn't matter which lvgl version (if any) you have installed.
-3. **Configure:** open `DeskDash/DeskDash.ino`, then set your Wi-Fi name and password, location, time zone, units, default airport and trends location in the `config.h` tab. The Wi-Fi name is case-sensitive. For trends, use the path from trends24.in, such as `united-states`, `united-states/miami`, or `""` for worldwide.
+3. **Configure:** open `DeskDash/DeskDash.ino`, then set your Wi-Fi name and password, location, time zone, units, and default airport in the `config.h` tab. The Wi-Fi name is case-sensitive.
 4. **Tools menu:**
 
    | Setting | Value |
@@ -68,7 +66,6 @@ softwareupdate --install-rosetta --agree-to-license
 - **LVGL 8.4:** LVGL runs in its own FreeRTOS task, with a mutex around every UI change. The draw buffers are two 40-line buffers in internal DMA-capable RAM. A full-screen buffer in PSRAM fails once Wi-Fi is running, because the SPI driver can't find internal memory to bounce it through. LVGL's object heap lives in PSRAM (`LV_MEM_CUSTOM`), which keeps about 64 KB of internal RAM free for Wi-Fi and TLS.
 - **I2C (SDA 27, SCL 26):** all I2C traffic (touch, backlight PWM through the CH32V006, AXP2101 battery status, SHTC3) runs on the LVGL task, so the bus is never shared between threads.
 - **Weather:** the board fetches weather over plain HTTP from Open-Meteo every 15 minutes.
-- **Trends:** the trends24.in page is about 250 KB, so the board parses it as a stream over HTTPS. It takes the first `<ol class=trend-card__list>` (the latest hour) and reads each `trend-link` name and `data-count`. HTML entities are decoded, and characters the fonts can't draw are dropped. A topic written entirely in another script is skipped.
 - **Fonts:** Montserrat and Font Awesome 5 glyphs, generated with [`lv_font_conv`](https://github.com/lvgl/lv_font_conv) at the sizes this screen needs.
 - **Indoor sensor:** the SHTC3 sits on the board, so its temperature reading runs a few degrees warm from the board's own heat.
 
@@ -82,7 +79,6 @@ static const DeskDashPlugin *PAGES[] = {
   &plugin_weather,
   &plugin_arrivals,
   &plugin_departures,
-  &plugin_trends,
   &plugin_system,
 };
 ```

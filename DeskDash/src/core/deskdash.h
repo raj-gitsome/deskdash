@@ -23,16 +23,6 @@
 #include "../../config.h"
 
 // ---- Defaults for settings added after the first release ------------------------
-#ifndef TRENDS_LOCATION
-#define TRENDS_LOCATION         "united-states"
-#define TRENDS_LOCATION_NAME    "United States"
-#endif
-#ifndef TRENDS_REFRESH_MINUTES
-#define TRENDS_REFRESH_MINUTES  30
-#endif
-#ifndef TRENDS_COUNT
-#define TRENDS_COUNT            10
-#endif
 #ifndef AIRPORT_CODE
 #define AIRPORT_CODE            "PBI"   // default airport; change it on screen by tapping the page title
 #endif
