@@ -3,6 +3,7 @@
 #include <WiFi.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
+#include "../../core/net.h"
 
 static Weather weather;
 static uint32_t version = 0;
@@ -137,7 +138,7 @@ static bool fetch() {
     http.end();
     return false;
   }
-  JsonDocument doc;
+  JsonDocument doc(dd_psram_json());
   DeserializationError err = deserializeJson(doc, http.getStream());
   http.end();
   if (err) {

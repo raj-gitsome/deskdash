@@ -17,6 +17,7 @@
 #include "src/drivers/Touch_FT6336.h"
 #include "src/drivers/lcd_st7796.h"
 #include "src/drivers/sensors.h"
+#include "src/core/net.h"
 
 // ---- Pages, in swipe order. Comment a line out to hide that page. -------------------
 extern const DeskDashPlugin plugin_clock, plugin_weather, plugin_arrivals, plugin_departures,
@@ -200,6 +201,7 @@ void setup() {
   Serial.begin(115200);
   delay(300);
   Serial.printf("\nDeskDash starting, %d pages (last reset: %d)\n", PAGE_COUNT, (int)esp_reset_reason());
+  dd_mem_watch_begin();
 
   // Board power, resets and backlight live on the CH32V006 I/O expander
   if (!Board_IO_Init(Wire)) Serial.println("[board] CH32V006 I/O expander not found");
@@ -267,6 +269,12 @@ void setup() {
 
 // Health line every 30 s, to diagnose drops: memory, Wi-Fi state and which page is showing
 static void diag_report() {
+  static size_t low_reported = SIZE_MAX;
+  size_t low = heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL);
+  if (low + 2048 < low_reported) {            // internal RAM hit a new low: say so right away
+    low_reported = low;
+    Serial.printf("[mem] internal RAM low-water mark %u bytes (page %s)\n", (unsigned)low, PAGES[current_page]->name);
+  }
   static uint32_t last = 0;
   if (millis() - last < 30000) return;
   last = millis();

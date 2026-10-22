@@ -2,6 +2,7 @@
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
+#include "../../core/net.h"
 #include <esp32-hal-psram.h>
 
 // ============================================================================
@@ -181,10 +182,11 @@ static bool http_json(const String &url, const String *post_body, JsonDocument &
     http.end();
     return false;
   }
-  String body = http.getString();   // 40-80 KB, lands in PSRAM; also undoes chunked encoding
+  PsramBody body;                    // 40-80 KB: kept in PSRAM so Wi-Fi keeps its internal RAM
+  bool got = dd_read_body(http, body);
   http.end();
-  if (body.length() == 0) return false;
-  DeserializationError err = deserializeJson(doc, body, DeserializationOption::Filter(filter));
+  if (!got) return false;
+  DeserializationError err = deserializeJson(doc, body.data, body.len, DeserializationOption::Filter(filter));
   if (err) {
     Serial.printf("[flights] JSON error: %s\n", err.c_str());
     return false;
@@ -278,7 +280,7 @@ static bool fetch() {
   for (const char *k : {"flight", "t", "category", "alt_baro", "gs", "track", "baro_rate", "geom_rate",
                         "lat", "lon", "dst", "dir"})
     f[k] = true;
-  JsonDocument doc;
+  JsonDocument doc(dd_psram_json());
   char url[112];
   snprintf(url, sizeof(url), "https://opendata.adsb.fi/api/v3/lat/%.4f/lon/%.4f/dist/%d",
            ap.lat, ap.lon, ARRIVALS_RADIUS_NM);
@@ -320,7 +322,7 @@ static bool fetch() {
   if (!route_cache) route_cache = (RouteEntry *)ps_calloc(ROUTE_CACHE_SIZE, sizeof(RouteEntry));
   static uint32_t last_routes = 0;
   if (route_cache && (last_routes == 0 || millis() - last_routes > 10UL * 60 * 1000)) {
-    JsonDocument req;
+    JsonDocument req(dd_psram_json());
     JsonArray planes = req["planes"].to<JsonArray>();
     for (int i = 0; i < nc && planes.size() < 40; i++) {
       if (route_find(cand[i].callsign)) continue;

@@ -13,6 +13,7 @@
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
+#include "../../core/net.h"
 #include <esp32-hal-psram.h>
 
 // ============================================================================
@@ -598,12 +599,13 @@ static void do_search() {
   if (http.begin(tls, url)) {
     int status = http.GET();
     if (status == 200) {
-      String body = http.getString();
+      PsramBody body;
+      dd_read_body(http, body, 64 * 1024);
       JsonDocument filter;
       filter["results"][0]["feedId"] = true;
       filter["results"][0]["title"] = true;
-      JsonDocument doc;
-      if (!deserializeJson(doc, body, DeserializationOption::Filter(filter))) {
+      JsonDocument doc(dd_psram_json());
+      if (body.data && !deserializeJson(doc, body.data, body.len, DeserializationOption::Filter(filter))) {
         ok = true;
         for (JsonObject r : doc["results"].as<JsonArray>()) {
           const char *id = r["feedId"] | "";
