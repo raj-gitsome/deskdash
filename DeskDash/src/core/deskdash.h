@@ -35,6 +35,9 @@
 #ifndef ARRIVALS_NIGHT_REFRESH_SECONDS
 #define ARRIVALS_NIGHT_REFRESH_SECONDS ARRIVALS_REFRESH_SECONDS
 #endif
+#ifndef RSS_REFRESH_MINUTES
+#define RSS_REFRESH_MINUTES     10      // how often each news feed is re-read
+#endif
 #ifndef AUTO_CYCLE_SECONDS
 #define AUTO_CYCLE_SECONDS      60      // show the next page this often to avoid burn-in (0 = off)
 #endif

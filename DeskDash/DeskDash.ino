@@ -20,13 +20,14 @@
 
 // ---- Pages, in swipe order. Comment a line out to hide that page. -------------------
 extern const DeskDashPlugin plugin_clock, plugin_weather, plugin_arrivals, plugin_departures,
-                            plugin_system;
+                            plugin_news, plugin_system;
 
 static const DeskDashPlugin *PAGES[] = {
   &plugin_clock,        // time, date, indoor reading, current weather
   &plugin_weather,      // forecast (also feeds the clock page's weather row)
   &plugin_arrivals,     // flights arriving at your airport (tap title to change airport)
   &plugin_departures,   // flights leaving your airport
+  &plugin_news,         // headlines from RSS feeds (tap title to choose feeds)
   &plugin_system,       // Wi-Fi, battery, uptime, brightness
 };
 static const int PAGE_COUNT = sizeof(PAGES) / sizeof(PAGES[0]);

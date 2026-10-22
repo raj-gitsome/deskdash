@@ -33,6 +33,11 @@
 #define ARRIVALS_REFRESH_SECONDS 60     // adsb.fi allows 1 request a second
 #define LANDED_KEEP_MINUTES     30      // landed flights stay on the Arrivals page this long
 
+// ---- News -----------------------------------------------------------------
+// Feeds are chosen on screen: tap the News page title. The built-in list is in
+// src/plugins/news/news.cpp.
+#define RSS_REFRESH_MINUTES     10
+
 // ---- Weather refresh -------------------------------------------------------
 #define WEATHER_REFRESH_MINUTES 15
 
