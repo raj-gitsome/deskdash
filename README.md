@@ -18,7 +18,7 @@ Swipe left or right to change pages. On the Arrivals or Departures page, **tap t
 
 <img src="docs/airport-picker.png" width="220" alt="Airport picker">
 
- The screen dims between 10 PM and 7 AM, and a tap brightens it for 30 seconds.
+To prevent burn-in, the display moves to the next page every minute (`AUTO_CYCLE_SECONDS` in `config.h`, 0 turns it off). It waits while you are using the screen: any touch, or the airport picker being open, holds the current page for another minute. The screen dims between 10 PM and 7 AM, and a tap brightens it for 30 seconds.
 Weather comes from [Open-Meteo](https://open-meteo.com), which is free and needs no API key. Time comes from NTP.
 Live flight positions come from [adsb.fi](https://adsb.fi), a free community ADS-B network that needs no key, and are refreshed every minute. One request feeds both flight pages. Routes come from [adsb.lol](https://adsb.lol)'s route database, looked up once per callsign and at most every 10 minutes to stay inside its daily limit. A flight counts as an arrival when the route database says its route ends at the airport, and as a departure when its route starts there. Flights with no published route, such as private jets, are judged by their flight path: descending toward the field on a normal approach slope, or climbing away from it. Light aircraft and helicopters are left out, since most low traffic near an airport is flight training. Aircraft taxiing out show as "Taxi".
 

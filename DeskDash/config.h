@@ -42,3 +42,4 @@
 #define NIGHT_START_HOUR   22    // 10 PM
 #define NIGHT_END_HOUR     7     // 7 AM
 #define WAKE_SECONDS       30    // how long a tap brightens the screen at night
+#define AUTO_CYCLE_SECONDS 60    // show the next page this often to avoid burn-in (0 = off)

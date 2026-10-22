@@ -35,6 +35,9 @@
 #ifndef ARRIVALS_NIGHT_REFRESH_SECONDS
 #define ARRIVALS_NIGHT_REFRESH_SECONDS ARRIVALS_REFRESH_SECONDS
 #endif
+#ifndef AUTO_CYCLE_SECONDS
+#define AUTO_CYCLE_SECONDS      60      // show the next page this often to avoid burn-in (0 = off)
+#endif
 #ifndef LANDED_KEEP_MINUTES
 #define LANDED_KEEP_MINUTES     30      // how long landed flights stay on the Arrivals page
 #endif

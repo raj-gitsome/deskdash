@@ -48,7 +48,10 @@ static void update_dots(int active) {
   }
 }
 
+static uint32_t page_shown_ms = 0;     // when the current page appeared (for auto-cycling)
+
 static void tileview_changed_cb(lv_event_t *e) {
+  page_shown_ms = millis();
   update_dots(lv_obj_get_x(lv_tileview_get_tile_act(tileview)) / SCREEN_W);
 }
 
@@ -105,6 +108,24 @@ static void tick_timer_cb(lv_timer_t *t) {
     if (PAGES[i]->tick) PAGES[i]->tick();
   bool recently_touched = last_touch_ms && (millis() - last_touch_ms < WAKE_SECONDS * 1000UL);
   set_brightness(is_night() && !recently_touched ? NIGHT_BRIGHTNESS : dd_day_brightness());
+
+  // Move to the next page every AUTO_CYCLE_SECONDS so no image sits on the panel for long.
+  // Waits while someone is using the screen (touched within the last cycle) or a pop-up
+  // such as the airport picker is open.
+  if (AUTO_CYCLE_SECONDS > 0 && PAGE_COUNT > 1) {
+    uint32_t cycle_ms = AUTO_CYCLE_SECONDS * 1000UL;
+    bool in_use = last_touch_ms && (millis() - last_touch_ms < cycle_ms);
+    bool popup = lv_obj_get_child_cnt(lv_layer_top()) > 0;
+    if (in_use || popup) {
+      page_shown_ms = millis();
+    } else if (millis() - page_shown_ms >= cycle_ms) {
+      int cur = lv_obj_get_x(lv_tileview_get_tile_act(tileview)) / SCREEN_W;
+      int next = (cur + 1) % PAGE_COUNT;
+      lv_obj_set_tile_id(tileview, next, 0, next == 0 ? LV_ANIM_OFF : LV_ANIM_ON);
+      update_dots(next);
+      page_shown_ms = millis();
+    }
+  }
 }
 
 // Every 15 s: battery and indoor sensor (all I2C stays on this thread)
